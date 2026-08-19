@@ -1,0 +1,17 @@
+{
+  "name": "project-status-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Project status dashboard with Neon PostgreSQL backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}
