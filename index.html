@@ -251,6 +251,9 @@
   .modal-head h2{ margin:0; font-size:16px; }
   .modal-close{ border:none; background:transparent; color:var(--muted); font-size:18px; padding:4px 8px; border-radius:6px; }
   .modal-close:hover{ background:var(--page); }
+  @keyframes modal-shake{ 10%,90%{transform:translateX(-1px);} 20%,80%{transform:translateX(2px);} 30%,50%,70%{transform:translateX(-4px);} 40%,60%{transform:translateX(4px);} }
+  .modal-shake{ animation: modal-shake 0.35s ease-in-out; }
+  .draft-hint{ font-size:11.5px; color:var(--warning); background:var(--warning-bg); border-radius:8px; padding:6px 10px; margin:-6px 0 12px; }
   .modal-sec-title{ font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); margin:18px 0 8px; }
   .comment-item{ padding:9px 0; border-bottom:1px solid var(--grid); }
   .comment-head{ display:flex; align-items:center; gap:7px; font-size:12px; font-weight:700; margin-bottom:3px; }
@@ -675,6 +678,56 @@ function toast(msg, isErr){
   el.textContent = msg;
   root.appendChild(el);
   setTimeout(()=>{ el.remove(); }, 3200);
+}
+
+/* ------------------------------ Lưu nháp form (chống mất dữ liệu) ------------------------------ */
+// Trình duyệt (đặc biệt trên di động, hoặc khi mở nhiều tab) có thể "giải phóng" tab đang chạy
+// ngầm để tiết kiệm bộ nhớ — người dùng gõ dở một biểu mẫu, mở tab khác xem thông tin, quay lại
+// thì trang đã bị tải lại từ đầu và mất hết nội dung đang nhập. Để tránh mất dữ liệu, các form
+// nhập liệu (thêm/sửa công việc, thêm dự án, bình luận) tự động lưu nháp vào localStorage mỗi khi
+// gõ, và tự khôi phục lại nếu form được mở lại trước khi lưu/huỷ.
+function draftKey(kind, id){ return 'pt_draft_' + kind + '_' + (id || 'x'); }
+function saveDraftData(key, data){ try{ localStorage.setItem(key, JSON.stringify(data)); }catch(e){} }
+function loadDraftData(key){ try{ const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : null; }catch(e){ return null; } }
+function clearDraft(key){ try{ localStorage.removeItem(key); }catch(e){} }
+let _draftSaveTimer = null;
+// Gắn tự động lưu nháp (debounce ~350ms) cho danh sách field id của 1 form vào key chỉ định.
+function wireDraftAutosave(key, fieldIds){
+  const save = ()=>{
+    clearTimeout(_draftSaveTimer);
+    _draftSaveTimer = setTimeout(()=>{
+      const data = {};
+      fieldIds.forEach(fid=>{ const f=document.getElementById(fid); if(f) data[fid]=f.value; });
+      saveDraftData(key, data);
+    }, 350);
+  };
+  fieldIds.forEach(id=>{
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.addEventListener('input', save);
+    el.addEventListener('change', save);
+  });
+}
+// Khôi phục nháp đã lưu (nếu có) vào các field tương ứng; trả về true nếu có khôi phục dữ liệu.
+function restoreDraftIntoFields(key, fieldIds){
+  const draft = loadDraftData(key);
+  if(!draft) return false;
+  let restored = false;
+  fieldIds.forEach(id=>{
+    const el = document.getElementById(id);
+    if(el && draft[id] !== undefined && draft[id] !== '' && draft[id] !== el.value){ el.value = draft[id]; restored = true; }
+  });
+  return restored;
+}
+// Rung nhẹ khung modal để báo cho người dùng biết bấm ra ngoài không đóng cửa sổ (tránh mất dữ liệu
+// đang nhập dở do lỡ tay bấm ra ngoài) — họ cần bấm nút X hoặc Huỷ để đóng.
+function nudgeModal(overlay){
+  const card = overlay.querySelector('.modal');
+  if(!card) return;
+  card.classList.remove('modal-shake');
+  void card.offsetWidth;
+  card.classList.add('modal-shake');
+  setTimeout(()=>card.classList.remove('modal-shake'), 350);
 }
 
 /* ------------------------------ Confirm modal ------------------------------ */
@@ -1697,11 +1750,26 @@ function bindTaskModal(){
   const overlay = document.getElementById('task-modal-overlay');
   if(!overlay) return;
   const t = taskById(State.openTaskId);
-  const close = ()=>{ State.openTaskId=null; renderModals(); };
-  overlay.addEventListener('mousedown', e=>{ if(e.target===overlay) close(); });
+  const dKey = draftKey('task', t.id);
+  const cKey = draftKey('comment', t.id);
+  const close = ()=>{ clearDraft(dKey); State.openTaskId=null; renderModals(); };
+  // Bấm ra ngoài cửa sổ không tự đóng nữa (tránh mất nội dung đang nhập dở do lỡ tay) —
+  // chỉ rung nhẹ để nhắc người dùng bấm nút X hoặc "Đóng" nếu thực sự muốn thoát.
+  overlay.addEventListener('mousedown', e=>{ if(e.target===overlay) nudgeModal(overlay); });
   document.getElementById('close-task-modal').addEventListener('click', close);
   document.getElementById('tm-cancel').addEventListener('click', close);
   document.querySelectorAll('[data-open-task]').forEach(el=>el.addEventListener('click',()=>{ State.openTaskId=el.dataset.openTask; renderModals(); }));
+
+  // Khôi phục & tự lưu nháp cho các field đang được phép chỉnh sửa — chống mất dữ liệu nếu
+  // trình duyệt tải lại trang do mở tab khác (xem ghi chú tại wireDraftAutosave).
+  const editableFieldIds = ['tm-title','tm-desc','tm-assignee','tm-status','tm-start','tm-due','tm-priority']
+    .filter(id=>{ const el=document.getElementById(id); return el && !el.disabled; });
+  if(editableFieldIds.length){
+    if(restoreDraftIntoFields(dKey, editableFieldIds)) toast('Đã khôi phục nội dung đang nhập dở trước đó');
+    wireDraftAutosave(dKey, editableFieldIds);
+  }
+  restoreDraftIntoFields(cKey, ['tm-comment']);
+  wireDraftAutosave(cKey, ['tm-comment']);
 
   const save = document.getElementById('tm-save');
   if(save) save.addEventListener('click', async ()=>{
@@ -1715,12 +1783,12 @@ function bindTaskModal(){
       priority: document.getElementById('tm-priority').value,
     };
     const ok = await updateTask(t.id, patch);
-    if(ok){ State.openTaskId=null; }
+    if(ok){ clearDraft(dKey); State.openTaskId=null; }
     renderModals();
   });
   const del = document.getElementById('tm-delete');
   if(del) del.addEventListener('click', ()=>{
-    askConfirm(`Xoá công việc "${t.title}"? Mọi công việc con và phản hồi liên quan cũng sẽ bị xoá.`, async ()=>{ await deleteTask(t.id); State.openTaskId=null; render(); });
+    askConfirm(`Xoá công việc "${t.title}"? Mọi công việc con và phản hồi liên quan cũng sẽ bị xoá.`, async ()=>{ clearDraft(dKey); clearDraft(cKey); await deleteTask(t.id); State.openTaskId=null; render(); });
   });
   document.querySelectorAll('[data-approve]').forEach(b=>b.addEventListener('click', ()=> setApprovalStatus(t.id, b.dataset.approve).then(renderModals)));
   const sendBtn = document.getElementById('tm-send-comment');
@@ -1728,6 +1796,7 @@ function bindTaskModal(){
     const ta = document.getElementById('tm-comment');
     if(!ta.value.trim()) return;
     await addComment(t.id, ta.value);
+    clearDraft(cKey);
     renderModals();
   });
   document.querySelectorAll('[data-del-comment]').forEach(b=>b.addEventListener('click', ()=> askConfirm('Xoá phản hồi này?', ()=>deleteComment(b.dataset.delComment).then(renderModals))));
@@ -1755,10 +1824,14 @@ function viewNewProjectModal(){
 function bindNewProjectModal(){
   const overlay = document.getElementById('np-overlay');
   if(!overlay) return;
-  const close = ()=>{ State.showNewProject=false; renderModals(); };
-  overlay.addEventListener('mousedown', e=>{ if(e.target===overlay) close(); });
+  const dKey = draftKey('newproject', 'x');
+  const close = ()=>{ clearDraft(dKey); State.showNewProject=false; renderModals(); };
+  overlay.addEventListener('mousedown', e=>{ if(e.target===overlay) nudgeModal(overlay); });
   document.getElementById('np-close').addEventListener('click', close);
   document.getElementById('np-cancel').addEventListener('click', close);
+  const fieldIds = ['np-name','np-desc','np-start','np-due'];
+  if(restoreDraftIntoFields(dKey, fieldIds)) toast('Đã khôi phục nội dung đang nhập dở trước đó');
+  wireDraftAutosave(dKey, fieldIds);
   document.getElementById('np-create').addEventListener('click', async ()=>{
     const name = document.getElementById('np-name').value.trim();
     if(!name){ toast('Vui lòng nhập tên dự án', true); return; }
@@ -1769,6 +1842,7 @@ function bindNewProjectModal(){
       status: 'planning',
     };
     State.showNewProject=false;
+    clearDraft(dKey);
     await createProject(payload);
   });
 }
@@ -1805,10 +1879,14 @@ function bindNewTaskModal(){
   const overlay = document.getElementById('nt-overlay');
   if(!overlay) return;
   const { projectId, parentId } = State.showNewTask;
-  const close = ()=>{ State.showNewTask=null; renderModals(); };
-  overlay.addEventListener('mousedown', e=>{ if(e.target===overlay) close(); });
+  const dKey = draftKey('newtask', projectId + '_' + (parentId || 'top'));
+  const close = ()=>{ clearDraft(dKey); State.showNewTask=null; renderModals(); };
+  overlay.addEventListener('mousedown', e=>{ if(e.target===overlay) nudgeModal(overlay); });
   document.getElementById('nt-close').addEventListener('click', close);
   document.getElementById('nt-cancel').addEventListener('click', close);
+  const fieldIds = ['nt-title','nt-desc','nt-assignee','nt-priority','nt-start','nt-due'];
+  if(restoreDraftIntoFields(dKey, fieldIds)) toast('Đã khôi phục nội dung đang nhập dở trước đó');
+  wireDraftAutosave(dKey, fieldIds);
   document.getElementById('nt-create').addEventListener('click', async ()=>{
     const title = document.getElementById('nt-title').value.trim();
     if(!title){ toast('Vui lòng nhập tên công việc', true); return; }
@@ -1821,6 +1899,7 @@ function bindNewTaskModal(){
       due_date: document.getElementById('nt-due').value || null,
     };
     State.showNewTask=null;
+    clearDraft(dKey);
     if(parentId) State.expanded[parentId]=true;
     await createTask(payload);
   });
@@ -1847,7 +1926,7 @@ function bindChangePasswordModal(){
   const overlay = document.getElementById('pw-overlay');
   if(!overlay) return;
   const close = ()=>{ State.showChangePassword=null; State.pwError=null; renderModals(); };
-  overlay.addEventListener('mousedown', e=>{ if(e.target===overlay) close(); });
+  overlay.addEventListener('mousedown', e=>{ if(e.target===overlay) nudgeModal(overlay); });
   document.getElementById('pw-close').addEventListener('click', close);
   document.getElementById('pw-cancel').addEventListener('click', close);
   document.getElementById('pw-save').addEventListener('click', async ()=>{
