@@ -361,6 +361,7 @@ const State = {
   expanded:{}, // taskId -> bool (tree expand state)
   openTaskId:null, openTaskDraft:null,
   showNewProject:false, showNewTask:null, // {projectId,parentId}
+  showChangePassword:null, pwError:null, pwBusy:false, // profileId being reset
   confirmState:null, // {message, onConfirm}
   error:null, authBusy:false,
 };
@@ -465,10 +466,41 @@ async function rejectProjectAdmin(projectId, userId){ return mutate(sb.from('pt_
 async function toggleAdmin(profileId, val){ return mutate(sb.from('pt_profiles').update({is_admin:val}).eq('id',profileId), 'Đã cập nhật quyền quản trị'); }
 async function setUserDisabled(profileId, val){ return mutate(sb.from('pt_profiles').update({disabled:val}).eq('id',profileId), val?'Đã vô hiệu hoá tài khoản':'Đã kích hoạt lại tài khoản'); }
 // New-signup approval: pt_profiles.approved gates whether a self-registered account can
-// access any project data at all (see pt_project_role RLS). Duyệt = approve; Xoá = reject
-// (delete the pending profile row outright — they were never given project access yet).
+// access any project data at all (see pt_project_role RLS).
 async function approveSignup(profileId){ return mutate(sb.from('pt_profiles').update({approved:true}).eq('id',profileId), 'Đã duyệt tài khoản'); }
-async function rejectSignup(profileId){ return mutate(sb.from('pt_profiles').delete().eq('id',profileId), 'Đã xoá tài khoản đăng ký'); }
+
+// Changing another user's password or fully deleting their account both require Supabase's
+// service-role key, which must NEVER be embedded in client code — so both go through the
+// 'admin-manage-user' Edge Function, which verifies the caller is an Administrator itself
+// before touching anything. See that function's source for the actual privileged logic.
+async function callAdminManageUser(action, targetId, extra){
+  const { data:{ session } } = await sb.auth.getSession();
+  const token = session ? session.access_token : null;
+  let res, body;
+  try{
+    res = await fetch(`${SUPABASE_URL}/functions/v1/admin-manage-user`, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':`Bearer ${token}`, 'apikey':SUPABASE_ANON_KEY },
+      body: JSON.stringify({ action, targetId, ...extra }),
+    });
+    body = await res.json().catch(()=>({}));
+  }catch(e){
+    toast('Không thể kết nối máy chủ để thực hiện thao tác này.', true);
+    return false;
+  }
+  if(!res.ok || body.error){ toast(body.error || 'Có lỗi xảy ra', true); return false; }
+  return true;
+}
+async function adminSetPassword(targetId, newPassword){
+  const ok = await callAdminManageUser('setPassword', targetId, { newPassword });
+  if(ok){ toast('Đã đổi mật khẩu'); State.showChangePassword=null; renderModals(); }
+  return ok;
+}
+async function adminDeleteUser(targetId){
+  const ok = await callAdminManageUser('deleteUser', targetId);
+  if(ok){ toast('Đã xoá tài khoản'); await loadAll(); render(); }
+  return ok;
+}
 
 /* fix setApproval properly */
 async function setApprovalStatus(taskId, status){
@@ -568,6 +600,7 @@ function renderModals(){
   if(State.openTaskId) html += viewTaskModal();
   if(State.showNewProject) html += viewNewProjectModal();
   if(State.showNewTask) html += viewNewTaskModal();
+  if(State.showChangePassword) html += viewChangePasswordModal();
   if(State.confirmState) html += viewConfirmModal();
   root.innerHTML = html;
   bindModals();
@@ -1280,52 +1313,38 @@ function viewAdmin(){
   const signupCount = pendingSignups().length;
   return `
   <div class="tabbar">
-    <button class="tabbtn ${State.adminTab==='users'?'active':''}" data-atab="users">Người dùng</button>
+    <button class="tabbtn ${State.adminTab==='users'?'active':''}" data-atab="users">Quản lý tài khoản${signupCount?` (${signupCount} chờ duyệt)`:''}</button>
     <button class="tabbtn ${State.adminTab==='perms'?'active':''}" data-atab="perms">Dự án &amp; phân quyền</button>
     <button class="tabbtn ${State.adminTab==='approvals'?'active':''}" data-atab="approvals">Phê duyệt quản trị dự án${pendingCount?` (${pendingCount})`:''}</button>
-    <button class="tabbtn ${State.adminTab==='signups'?'active':''}" data-atab="signups">Tài khoản mới đăng ký${signupCount?` (${signupCount})`:''}</button>
   </div>
-  ${State.adminTab==='users' ? viewAdminUsers() : State.adminTab==='approvals' ? viewAdminApprovals() : State.adminTab==='signups' ? viewAdminSignups() : viewAdminPerms()}
+  ${State.adminTab==='users' ? viewAdminUsers() : State.adminTab==='approvals' ? viewAdminApprovals() : viewAdminPerms()}
   `;
 }
 function viewAdminUsers(){
   // The global Administrator is intentionally never listed here — see project rules.
-  const list = State.profiles.filter(pr=>!pr.is_admin);
+  // Sorted so pending-approval accounts surface at the top, easiest to spot/act on first.
+  const list = State.profiles.filter(pr=>!pr.is_admin).sort((a,b)=> (a.approved===b.approved) ? 0 : (a.approved ? 1 : -1));
   return `<div class="card pad">
-    <div class="section-title">Toàn bộ người dùng (${list.length})</div>
+    <div class="section-title">Toàn bộ tài khoản (${list.length})</div>
+    <p style="font-size:12.5px;color:var(--text-2);margin-top:-4px;">Danh sách đầy đủ mọi tài khoản trong hệ thống — duyệt tài khoản mới đăng ký, đổi mật khẩu, vô hiệu hoá hoặc xoá, tất cả ở một nơi.</p>
     ${list.map(pr=>`
-      <div class="members-row">
+      <div class="members-row" style="flex-wrap:wrap;">
         <div class="avatar" style="width:28px;height:28px;font-size:11px;background:${avatarColor(pr.id)}">${initials(pr.full_name)}</div>
-        <div style="flex:1;min-width:0;">
+        <div style="flex:1 1 200px;min-width:0;">
           <div class="name" style="${pr.disabled?'color:var(--critical);text-decoration:line-through;':''}">${escapeHtml(pr.full_name)}</div>
-          <div class="email">${escapeHtml(pr.email)}</div>
+          <div class="email">${escapeHtml(pr.email)} &middot; Đăng ký: ${fmtDateTime(pr.created_at)}</div>
         </div>
         ${!pr.approved ? `<span class="badge" style="font-size:10px;background:#fab21922;color:#8a6300;">Chờ duyệt</span>` : ''}
         ${pr.disabled ? `<span class="badge" style="font-size:10px;background:#d03b3b18;color:var(--critical);">Đã vô hiệu hoá</span>` : ''}
+        ${!pr.approved ? `<button class="btn btn-sm" style="color:var(--good);border-color:var(--good);" data-signup-approve="${pr.id}">Duyệt</button>` : ''}
+        <button class="btn btn-sm" data-change-password="${pr.id}">Đổi mật khẩu</button>
         <span style="font-size:11px;color:var(--muted);">Vô hiệu hoá</span>
         <button class="toggle ${pr.disabled?'on':''}" style="background:${pr.disabled?'var(--critical)':''}" data-toggle-disabled="${pr.id}"><span class="knob"></span></button>
         <span style="font-size:11px;color:var(--muted);margin-left:8px;">Quản trị hệ thống</span>
         <button class="toggle ${pr.is_admin?'on':''}" data-toggle-admin="${pr.id}"><span class="knob"></span></button>
+        <button class="btn btn-sm btn-danger" data-delete-user="${pr.id}">Xoá</button>
       </div>
-    `).join('') || '<div class="empty-hint">Chưa có người dùng nào khác.</div>'}
-  </div>`;
-}
-function viewAdminSignups(){
-  const list = pendingSignups();
-  return `<div class="card pad">
-    <div class="section-title">Tài khoản mới đăng ký — chờ phê duyệt (${list.length})</div>
-    <p style="font-size:12.5px;color:var(--text-2);margin-top:-4px;">Người mới đăng ký chỉ thấy màn hình "chờ phê duyệt" và không truy cập được dự án nào cho tới khi bạn duyệt ở đây. Xoá sẽ từ chối và gỡ bỏ hoàn toàn yêu cầu đăng ký này (chưa có dữ liệu nào gắn với tài khoản này nên xoá an toàn).</p>
-    ${list.map(pr=>`
-      <div class="members-row">
-        <div class="avatar" style="width:28px;height:28px;font-size:11px;background:${avatarColor(pr.id)}">${initials(pr.full_name)}</div>
-        <div style="flex:1;min-width:0;">
-          <div class="name">${escapeHtml(pr.full_name)}</div>
-          <div class="email">${escapeHtml(pr.email)} &middot; Đăng ký: ${fmtDateTime(pr.created_at)}</div>
-        </div>
-        <button class="btn btn-sm" style="color:var(--good);border-color:var(--good);" data-signup-approve="${pr.id}">Duyệt</button>
-        <button class="btn btn-sm" style="color:var(--critical);border-color:var(--critical);" data-signup-reject="${pr.id}">Xoá</button>
-      </div>
-    `).join('') || '<div class="empty-hint">Không có tài khoản nào đang chờ duyệt.</div>'}
+    `).join('') || '<div class="empty-hint">Chưa có tài khoản nào khác.</div>'}
   </div>`;
 }
 function viewAdminApprovals(){
@@ -1409,17 +1428,18 @@ function bindAdmin(){
     document.querySelectorAll('[data-toggle-disabled]').forEach(b=>b.addEventListener('click',()=>{
       const id=b.dataset.toggleDisabled; const pr=profileById(id); setUserDisabled(id, !pr.disabled);
     }));
+    document.querySelectorAll('[data-signup-approve]').forEach(b=>b.addEventListener('click',()=> approveSignup(b.dataset.signupApprove)));
+    document.querySelectorAll('[data-change-password]').forEach(b=>b.addEventListener('click',()=>{
+      State.showChangePassword = b.dataset.changePassword; State.pwError=null; renderModals();
+    }));
+    document.querySelectorAll('[data-delete-user]').forEach(b=>b.addEventListener('click',()=>{
+      const id=b.dataset.deleteUser; const pr=profileById(id);
+      askConfirm(`Xoá vĩnh viễn tài khoản "${pr?pr.full_name:''}" (${pr?pr.email:''})? Người này sẽ không đăng nhập được nữa. Nếu tài khoản đã có dữ liệu dự án/công việc, hệ thống sẽ từ chối xoá — hãy dùng Vô hiệu hoá thay thế trong trường hợp đó.`, ()=>adminDeleteUser(id));
+    }));
   }
   if(State.adminTab==='approvals'){
     document.querySelectorAll('[data-appr-approve]').forEach(b=>b.addEventListener('click',()=>{ const [pid,uid]=b.dataset.apprApprove.split('|'); approveProjectAdmin(pid,uid); }));
     document.querySelectorAll('[data-appr-reject]').forEach(b=>b.addEventListener('click',()=>{ const [pid,uid]=b.dataset.apprReject.split('|'); askConfirm('Từ chối quyền Quản trị dự án? Người này sẽ được hạ xuống Biên tập viên.', ()=>rejectProjectAdmin(pid,uid)); }));
-  }
-  if(State.adminTab==='signups'){
-    document.querySelectorAll('[data-signup-approve]').forEach(b=>b.addEventListener('click',()=> approveSignup(b.dataset.signupApprove)));
-    document.querySelectorAll('[data-signup-reject]').forEach(b=>b.addEventListener('click',()=>{
-      const id=b.dataset.signupReject; const pr=profileById(id);
-      askConfirm(`Xoá yêu cầu đăng ký của "${pr?pr.full_name:''}" (${pr?pr.email:''})? Người này sẽ không đăng nhập được nữa.`, ()=>rejectSignup(id));
-    }));
   }
   if(State.adminTab==='perms'){
     const sel = document.getElementById('admin-project-select');
@@ -1547,6 +1567,7 @@ function bindModals(){
   bindTaskModal();
   bindNewProjectModal();
   bindNewTaskModal();
+  bindChangePasswordModal();
   bindConfirmModal();
 }
 function bindTaskModal(){
@@ -1679,6 +1700,40 @@ function bindNewTaskModal(){
     State.showNewTask=null;
     if(parentId) State.expanded[parentId]=true;
     await createTask(payload);
+  });
+}
+
+/* ------------------------------- Change password modal -------------------------------- */
+function viewChangePasswordModal(){
+  const pr = profileById(State.showChangePassword);
+  return `<div class="overlay" id="pw-overlay">
+    <div class="card modal modal-sm">
+      <div class="modal-head"><h2>Đổi mật khẩu</h2><button class="modal-close" id="pw-close">&times;</button></div>
+      <p style="font-size:12.5px;color:var(--text-2);margin-top:-8px;">Đặt mật khẩu mới cho <b>${escapeHtml(pr?pr.full_name:'')}</b> (${escapeHtml(pr?pr.email:'')}). Hãy báo mật khẩu mới cho người này sau khi đổi.</p>
+      ${State.pwError ? `<div class="err-box">${escapeHtml(State.pwError)}</div>` : ''}
+      <div class="field"><label class="field-label">Mật khẩu mới</label><input type="text" id="pw-new" placeholder="Tối thiểu 6 ký tự" autocomplete="off"></div>
+      <div class="modal-actions">
+        <div class="spacer"></div>
+        <button class="btn" id="pw-cancel">Huỷ</button>
+        <button class="btn btn-primary" id="pw-save" ${State.pwBusy?'disabled':''}>${State.pwBusy?'Đang lưu…':'Đổi mật khẩu'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+function bindChangePasswordModal(){
+  const overlay = document.getElementById('pw-overlay');
+  if(!overlay) return;
+  const close = ()=>{ State.showChangePassword=null; State.pwError=null; renderModals(); };
+  overlay.addEventListener('mousedown', e=>{ if(e.target===overlay) close(); });
+  document.getElementById('pw-close').addEventListener('click', close);
+  document.getElementById('pw-cancel').addEventListener('click', close);
+  document.getElementById('pw-save').addEventListener('click', async ()=>{
+    const val = document.getElementById('pw-new').value;
+    if(!val || val.length<6){ State.pwError='Mật khẩu mới phải có ít nhất 6 ký tự.'; renderModals(); return; }
+    State.pwBusy=true; State.pwError=null; renderModals();
+    const ok = await adminSetPassword(State.showChangePassword, val);
+    State.pwBusy=false;
+    if(!ok) renderModals();
   });
 }
 
