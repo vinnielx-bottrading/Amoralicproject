@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Amoralic Project Tracker — Dashboard theo dõi dự án</title>
+<title>Project Tracker — Dashboard theo dõi dự án</title>
 <style>
   :root{
     color-scheme: light;
@@ -115,16 +115,28 @@
     0%,100%{ box-shadow:0 0 0 0 #fab21966, 0 0 0 1px #fab219aa inset; }
     50%{ box-shadow:0 0 0 5px #fab21900, 0 0 0 1px #fab219aa inset; }
   }
+  /* overdue: strong red glow + red border/tint so it reads unmistakably at a glance (Tổng Giám Đốc scan) */
   @keyframes glow-pulse-critical{
-    0%,100%{ box-shadow:0 0 0 0 #d03b3b66, 0 0 0 1px #d03b3baa inset; }
-    50%{ box-shadow:0 0 0 5px #d03b3b00, 0 0 0 1px #d03b3baa inset; }
+    0%,100%{ box-shadow:0 0 6px 2px #d03b3b99, 0 0 0 2px var(--critical) inset; }
+    50%{ box-shadow:0 0 22px 7px #d03b3bd9, 0 0 0 2px var(--critical) inset; }
   }
   .due-soon{ animation: glow-pulse 1.8s ease-in-out infinite; }
-  .overdue-glow{ animation: glow-pulse-critical 1.8s ease-in-out infinite; }
+  .overdue-glow{
+    animation: glow-pulse-critical 1.4s ease-in-out infinite;
+    border-color: var(--critical) !important;
+    background: #d03b3b0d;
+  }
+  .overdue-glow .task-title,
+  .overdue-glow .kanban-card-title,
+  .overdue-glow.project-card h3{ color:var(--critical); }
+  .overdue-tag{ display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:800; color:#fff; background:var(--critical); padding:2px 7px; border-radius:100px; letter-spacing:.02em; text-transform:uppercase; }
+  .gantt-bar.overdue-glow{ animation: glow-pulse-critical 1.4s ease-in-out infinite; outline:2px solid var(--critical); background:var(--critical) !important; }
 
   /* ---------- Login ---------- */
-  .login-wrap{ min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
+  .login-wrap{ min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:20px; gap:16px; }
   .login-card{ width:100%; max-width:400px; padding:30px; }
+  .disclosure-box{ width:100%; max-width:400px; padding:14px 16px; font-size:11.5px; line-height:1.6; color:var(--muted); text-align:center; }
+  .disclosure-box b{ color:var(--text-2); }
   .login-title{ font-size:20px; font-weight:800; margin:2px 0 3px; }
   .login-sub{ font-size:13px; color:var(--muted); margin-bottom:22px; }
   .login-tabs{ display:flex; gap:4px; background:var(--page); padding:3px; border-radius:9px; margin-bottom:20px; }
@@ -207,6 +219,24 @@
   .barrow-fill{ height:100%; border-radius:100px; }
   .barrow-value{ width:34px; flex:0 0 auto; text-align:right; font-size:12.5px; font-weight:700; font-variant-numeric: tabular-nums; }
 
+  /* ---------- Stats: trend chart / tables / grouped lists ---------- */
+  .stats-3col{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+  .stats-list-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; padding:7px 0; border-bottom:1px solid var(--grid); cursor:pointer; }
+  .stats-list-row:last-child{ border-bottom:none; }
+  .stats-list-row .name{ font-size:12.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .stats-list-row .meta{ font-size:11px; color:var(--muted); white-space:nowrap; flex:0 0 auto; }
+  .data-table{ width:100%; border-collapse:collapse; font-size:12.5px; }
+  .data-table th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); font-weight:700; padding:8px 10px; border-bottom:1px solid var(--border); white-space:nowrap; }
+  .data-table td{ padding:9px 10px; border-bottom:1px solid var(--grid); vertical-align:middle; }
+  .data-table tbody tr:hover td{ background:var(--page); }
+  .data-table td.num{ text-align:right; font-variant-numeric:tabular-nums; }
+  .data-table tr.row-overdue td{ color:var(--critical); }
+  .data-table tr.row-overdue{ background:#d03b3b0a; }
+  .chart-legend{ display:flex; gap:16px; margin-bottom:8px; font-size:11.5px; color:var(--text-2); flex-wrap:wrap; }
+  .chart-legend .key{ display:inline-flex; align-items:center; gap:5px; }
+  .chart-legend .line{ width:14px; height:2px; display:inline-block; border-radius:2px; }
+  @media (max-width:980px){ .stats-3col{ grid-template-columns:1fr; } }
+
   /* ---------- Modal ---------- */
   .overlay{ position:fixed; inset:0; background:rgba(11,11,11,0.42); display:flex; align-items:flex-start; justify-content:center; padding:40px 16px; overflow-y:auto; z-index:50; }
   .modal{ width:100%; max-width:640px; padding:22px 24px 24px; margin-bottom:40px; }
@@ -261,7 +291,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script>
 /* =========================================================================
-   AMORALIC PROJECT TRACKER DASHBOARD
+   PROJECT TRACKER DASHBOARD
    Single-file SPA backed by Supabase (Postgres + Auth + RLS).
    ========================================================================= */
 
@@ -298,6 +328,12 @@ const PROJECT_STATUS = {
   on_hold:   { label:'Tạm dừng',     color:'var(--serious)' },
   completed: { label:'Hoàn thành',   color:'var(--blue)' },
 };
+const ROLE_LABELS = {
+  admin:    'Quản trị dự án',
+  editor:   'Biên tập viên',
+  viewer:   'Chỉ xem',
+  approver: 'Phê duyệt (Tổng Giám Đốc)',
+};
 
 /* ------------------------------- Utils ---------------------------------- */
 function pad(n){ return n<10 ? '0'+n : ''+n; }
@@ -307,8 +343,9 @@ function fmtDate(s){ if(!s) return '—'; const d=parseDate(s); return `${pad(d.
 function fmtDateTime(iso){ if(!iso) return ''; const d=new Date(iso); return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 function daysBetween(a,b){ return Math.round((b-a)/86400000); }
 function daysUntil(dateStr){ if(!dateStr) return null; return daysBetween(parseDate(todayStr()), parseDate(dateStr)); }
-function isDueSoon(item){ if(!item.due_date || item.status==='done') return false; const d=daysUntil(item.due_date); return d!==null && d>=0 && d<=3; }
-function isOverdue(item){ if(!item.due_date || item.status==='done') return false; const d=daysUntil(item.due_date); return d!==null && d<0; }
+function isDoneItem(item){ return item.status==='done' || item.status==='completed'; }
+function isDueSoon(item){ if(!item.due_date || isDoneItem(item)) return false; const d=daysUntil(item.due_date); return d!==null && d>=0 && d<=3; }
+function isOverdue(item){ if(!item.due_date || isDoneItem(item)) return false; const d=daysUntil(item.due_date); return d!==null && d<0; }
 function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function nl2br(s){ return escapeHtml(s).replace(/\n/g,'<br>'); }
 function initials(name){ if(!name) return '?'; const p=name.trim().split(/\s+/); return ((p[0]||'')[0]+((p[p.length-1]||'')[0]||'')).toUpperCase(); }
@@ -357,10 +394,22 @@ function myRole(pid){
   if(!State.profile) return null;
   if(State.profile.is_admin) return 'admin';
   const m = State.allMembers.find(m=>m.project_id===pid && m.user_id===State.profile.id);
-  return m ? m.role : null;
+  if(!m || m.removed_at) return null; // removed members have no access
+  if(m.role==='admin' && !m.admin_approved) return 'editor'; // pending project-admin grant falls back to editor
+  return m.role;
 }
 function canEdit(pid){ const r=myRole(pid); return r==='admin' || r==='editor'; }
+function canEditDates(pid){ return isGlobalAdmin() || myRole(pid)==='admin'; }
+function canApprove(pid){ return isGlobalAdmin() || myRole(pid)==='approver'; }
 function isGlobalAdmin(){ return !!(State.profile && State.profile.is_admin); }
+function isAdminProfile(id){ const pr=profileById(id); return !!(pr && pr.is_admin); }
+function isPendingProjectAdmin(pid){
+  const m = State.allMembers.find(m=>m.project_id===pid && m.user_id===State.profile.id);
+  return !!(m && m.role==='admin' && !m.admin_approved && !m.removed_at);
+}
+// Active (not removed), non-Administrator members — used for rosters & assignment pickers.
+function visibleMembers(pid){ return membersOfProject(pid).filter(m=>!m.removed_at && !isAdminProfile(m.user_id)); }
+function removedMembers(pid){ return membersOfProject(pid).filter(m=>m.removed_at && !isAdminProfile(m.user_id)); }
 
 function projectStats(pid){
   const tasks = tasksOfProject(pid);
@@ -407,8 +456,14 @@ async function addComment(taskId, content){
 async function deleteComment(id){ return mutate(sb.from('pt_task_comments').delete().eq('id',id)); }
 async function addMember(projectId, userId, role){ return mutate(sb.from('pt_project_members').insert({ project_id:projectId, user_id:userId, role }), 'Đã thêm thành viên'); }
 async function updateMemberRole(projectId, userId, role){ return mutate(sb.from('pt_project_members').update({role}).eq('project_id',projectId).eq('user_id',userId), 'Đã cập nhật quyền'); }
-async function removeMember(projectId, userId){ return mutate(sb.from('pt_project_members').delete().eq('project_id',projectId).eq('user_id',userId), 'Đã xoá thành viên'); }
+// Loại thành viên khỏi dự án = "soft remove": không xoá hàng, chỉ đánh dấu removed_at để vẫn
+// tra cứu được lịch sử tham gia. Có thể khôi phục lại bằng restoreMember().
+async function softRemoveMember(projectId, userId){ return mutate(sb.from('pt_project_members').update({removed_at:new Date().toISOString()}).eq('project_id',projectId).eq('user_id',userId), 'Đã loại thành viên khỏi dự án'); }
+async function restoreMember(projectId, userId){ return mutate(sb.from('pt_project_members').update({removed_at:null}).eq('project_id',projectId).eq('user_id',userId), 'Đã khôi phục thành viên'); }
+async function approveProjectAdmin(projectId, userId){ return mutate(sb.from('pt_project_members').update({admin_approved:true}).eq('project_id',projectId).eq('user_id',userId), 'Đã phê duyệt quyền quản trị dự án'); }
+async function rejectProjectAdmin(projectId, userId){ return mutate(sb.from('pt_project_members').update({role:'editor'}).eq('project_id',projectId).eq('user_id',userId), 'Đã từ chối — hạ xuống Biên tập viên'); }
 async function toggleAdmin(profileId, val){ return mutate(sb.from('pt_profiles').update({is_admin:val}).eq('id',profileId), 'Đã cập nhật quyền quản trị'); }
+async function setUserDisabled(profileId, val){ return mutate(sb.from('pt_profiles').update({disabled:val}).eq('id',profileId), val?'Đã vô hiệu hoá tài khoản':'Đã kích hoạt lại tài khoản'); }
 
 /* fix setApproval properly */
 async function setApprovalStatus(taskId, status){
@@ -507,7 +562,7 @@ function viewLogin(){
       <div class="brand" style="padding:0;border:none;margin-bottom:16px;">
         <div class="brand-mark"></div>
         <div>
-          <div class="brand-text">Amoralic Project Tracker</div>
+          <div class="brand-text">Project Tracker</div>
           <div class="brand-sub">Dashboard theo dõi dự án doanh nghiệp</div>
         </div>
       </div>
@@ -531,10 +586,11 @@ function viewLogin(){
           <button class="btn btn-primary" style="width:100%;justify-content:center;" ${State.authBusy?'disabled':''}>${State.authBusy?'Đang đăng nhập…':'Đăng nhập'}</button>
         </form>
         <div class="demo-box">
-          <b>Công bố bắt buộc:</b> Dự án cam kết tuân thủ Luật An ninh mạng của Việt Nam, các quy định về bảo vệ dữ liệu và quyền riêng tư hiện hành, đồng thời tuân thủ FTC Act của Hoa Kỳ, bảo đảm thông tin được công bố minh bạch, trung thực, chính xác và không gây hiểu nhầm.
+          Chưa có tài khoản? Chuyển sang tab <b>Đăng ký</b> để tạo tài khoản mới — sau khi đăng ký, hãy nhờ Administrator cấp quyền truy cập vào dự án cụ thể trong trang <b>Quản trị</b>.
         </div>
       `}
     </div>
+    <div class="disclosure-box"><b>Công bố bắt buộc:</b> Dự án cam kết tuân thủ Luật An ninh mạng của Việt Nam, các quy định về bảo vệ dữ liệu và quyền riêng tư hiện hành, đồng thời tuân thủ FTC Act của Hoa Kỳ, bảo đảm thông tin được công bố minh bạch, trung thực, chính xác và không gây hiểu nhầm.</div>
   </div>`;
 }
 function bindLogin(){
@@ -568,7 +624,7 @@ function viewShell(){
     <div class="sidebar">
       <div class="brand">
         <div class="brand-mark"></div>
-        <div><div class="brand-text">KafkaX Tracker</div><div class="brand-sub">Dashboard dự án</div></div>
+        <div><div class="brand-text">Project Tracker</div><div class="brand-sub">Dashboard dự án</div></div>
       </div>
       <div class="nav">
         ${navItems().map(it=>`<button class="nav-item ${State.view===it.key?'active':''}" data-nav="${it.key}"><span class="nav-icon">${it.icon}</span>${it.label}</button>`).join('')}
@@ -585,7 +641,7 @@ function viewShell(){
     <div class="main">
       <div class="topbar">
         <div><h1>${escapeHtml(title)}</h1><div class="crumb">${escapeHtml(sub)}</div></div>
-        ${State.view==='projects' ? `<button class="btn btn-primary" id="new-project-btn" ${isGlobalAdmin()?'':'style="display:none"'}>+ Dự án mới</button>` : ''}
+        ${State.view==='projects' ? `<button class="btn btn-primary" id="new-project-btn">+ Dự án mới</button>` : ''}
         ${State.view==='project' ? `<button class="btn btn-ghost" id="back-btn">&larr; Danh sách dự án</button>` : ''}
       </div>
       <div class="content">
@@ -619,11 +675,14 @@ function viewProjects(){
       const meta = PROJECT_STATUS[p.status] || PROJECT_STATUS.planning;
       const dueSoonProj = isDueSoon(p);
       const overdueProj = isOverdue(p);
-      const members = membersOfProject(p.id);
+      const members = visibleMembers(p.id);
       return `<div class="card project-card ${dueSoonProj?'due-soon':''} ${overdueProj?'overdue-glow':''}" data-open-project="${p.id}">
         <div class="project-card-top">
           <h3>${escapeHtml(p.name)}</h3>
-          <span class="badge" style="background:${meta.color}18;color:${meta.color}"><span class="dot" style="background:${meta.color}"></span>${meta.label}</span>
+          <div style="display:flex;align-items:center;gap:6px;">
+            ${overdueProj ? `<span class="overdue-tag">&#9888; Trễ hạn</span>` : ''}
+            <span class="badge" style="background:${meta.color}18;color:${meta.color}"><span class="dot" style="background:${meta.color}"></span>${meta.label}</span>
+          </div>
         </div>
         <div class="project-desc">${escapeHtml(p.description||'Chưa có mô tả')}</div>
         <div class="progress-track"><div class="progress-fill" style="width:${st.pct}%"></div></div>
@@ -649,15 +708,20 @@ function viewProjectDetail(){
   if(!p) return `<div class="card empty-hint">Không tìm thấy dự án.</div>`;
   const st = projectStats(p.id);
   const meta = PROJECT_STATUS[p.status] || PROJECT_STATUS.planning;
-  const editable = canEdit(p.id);
-  const members = membersOfProject(p.id);
+  const isProjectAdmin = isGlobalAdmin() || myRole(p.id)==='admin';
+  const active = visibleMembers(p.id);
+  const removed = removedMembers(p.id);
+  const memberIds = new Set(membersOfProject(p.id).map(m=>m.user_id));
+  const addableProfiles = State.profiles.filter(pr=>!pr.is_admin && !memberIds.has(pr.id));
+  const pending = isPendingProjectAdmin(p.id);
   return `
   <div class="card pad" style="margin-bottom:18px;">
+    ${pending ? `<div class="err-box" style="background:#fab21922;border-color:#fab21966;color:#8a6300;margin-bottom:14px;">Quyền Quản trị dự án của bạn cho dự án này đang <b>chờ Administrator phê duyệt</b>. Trong lúc chờ, bạn có quyền như Biên tập viên.</div>` : ''}
     <div style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;">
       <div style="flex:1 1 320px;min-width:0;">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="badge" style="background:${meta.color}18;color:${meta.color}"><span class="dot" style="background:${meta.color}"></span>${meta.label}</span>
-          ${editable ? `<select id="project-status-select" class="role-select" style="width:auto;">${Object.entries(PROJECT_STATUS).map(([k,v])=>`<option value="${k}" ${p.status===k?'selected':''}>${v.label}</option>`).join('')}</select>` : ''}
+          ${isProjectAdmin ? `<select id="project-status-select" class="role-select" style="width:auto;">${Object.entries(PROJECT_STATUS).map(([k,v])=>`<option value="${k}" ${p.status===k?'selected':''}>${v.label}</option>`).join('')}</select>` : ''}
         </div>
         <p style="color:var(--text-2);font-size:13.5px;line-height:1.6;margin:10px 0 0;max-width:640px;">${escapeHtml(p.description||'Chưa có mô tả chi tiết.')}</p>
         <div style="display:flex;gap:22px;margin-top:14px;font-size:12.5px;color:var(--muted);flex-wrap:wrap;">
@@ -667,13 +731,40 @@ function viewProjectDetail(){
         </div>
         <div class="progress-track" style="max-width:400px;margin-top:10px;"><div class="progress-fill" style="width:${st.pct}%"></div></div>
       </div>
-      <div style="min-width:200px;">
+      <div style="min-width:240px;">
         <div class="modal-sec-title" style="margin-top:0;">Thành viên</div>
-        ${members.map(m=>{ const pr=profileById(m.user_id); return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        ${active.map(m=>{ const pr=profileById(m.user_id); const isPendingAdmin = m.role==='admin' && !m.admin_approved; return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
           <div class="avatar" style="width:24px;height:24px;font-size:10px;background:${avatarColor(m.user_id)}">${initials(pr?pr.full_name:'?')}</div>
-          <span style="font-size:12.5px;">${escapeHtml(pr?pr.full_name:'—')}</span>
-          <span class="badge" style="font-size:10px;padding:2px 7px;background:var(--page);color:var(--text-2);">${m.role==='admin'?'Quản trị':m.role==='editor'?'Biên tập':'Xem'}</span>
+          <span style="font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(pr?pr.full_name:'—')}</span>
+          ${isProjectAdmin ? `<select class="role-select" style="font-size:10px;padding:2px 6px;" data-pd-member-role="${m.user_id}">
+              <option value="admin" ${m.role==='admin'?'selected':''}>Quản trị</option>
+              <option value="editor" ${m.role==='editor'?'selected':''}>Biên tập</option>
+              <option value="approver" ${m.role==='approver'?'selected':''}>Phê duyệt</option>
+              <option value="viewer" ${m.role==='viewer'?'selected':''}>Xem</option>
+            </select>` : `<span class="badge" style="font-size:10px;padding:2px 7px;background:var(--page);color:var(--text-2);">${ROLE_LABELS[m.role]||m.role}</span>`}
+          ${isPendingAdmin ? `<span class="badge" style="font-size:10px;padding:2px 7px;background:#fab21922;color:#8a6300;">Chờ duyệt</span>` : ''}
+          ${isPendingAdmin && isGlobalAdmin() ? `<button class="btn btn-sm" style="padding:2px 7px;font-size:10px;" data-pd-approve-admin="${m.user_id}">Duyệt</button>` : ''}
+          ${isProjectAdmin ? `<button class="icon-btn" title="Loại khỏi dự án" data-pd-remove="${m.user_id}">&#128465;</button>` : ''}
         </div>`; }).join('') || '<div style="font-size:12px;color:var(--muted)">Chưa có thành viên</div>'}
+        ${removed.length ? `<div class="modal-sec-title">Đã rời dự án</div>${removed.map(m=>{ const pr=profileById(m.user_id); return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;opacity:.85;">
+          <div class="avatar" style="width:24px;height:24px;font-size:10px;background:var(--muted);">${initials(pr?pr.full_name:'?')}</div>
+          <span style="font-size:12.5px;flex:1;min-width:0;color:var(--critical);text-decoration:line-through;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(pr?pr.full_name:'—')}</span>
+          <span style="font-size:10px;color:var(--critical);white-space:nowrap;">Dừng: ${fmtDateTime(m.removed_at)}</span>
+          ${isProjectAdmin ? `<button class="icon-btn" title="Khôi phục" data-pd-restore="${m.user_id}">&#8635;</button>` : ''}
+        </div>`; }).join('')}` : ''}
+        ${isProjectAdmin ? `<div class="modal-sec-title">Thêm thành viên</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <select id="pd-add-member-select" style="flex:1 1 140px;font-size:12px;">
+              ${addableProfiles.map(pr=>`<option value="${pr.id}">${escapeHtml(pr.full_name)}</option>`).join('') || '<option value="">Không còn ai để thêm</option>'}
+            </select>
+            <select id="pd-add-member-role" style="width:100px;font-size:12px;">
+              <option value="viewer">Xem</option>
+              <option value="editor">Biên tập</option>
+              <option value="approver">Phê duyệt</option>
+              <option value="admin">Quản trị</option>
+            </select>
+            <button class="btn btn-primary btn-sm" id="pd-add-member-btn" ${!addableProfiles.length?'disabled':''}>Thêm</button>
+          </div>` : ''}
       </div>
     </div>
   </div>
@@ -694,6 +785,20 @@ function bindProjectDetail(){
   document.querySelectorAll('[data-ptab]').forEach(b=>b.addEventListener('click',()=>{ State.projectTab=b.dataset.ptab; render(); }));
   const sel = document.getElementById('project-status-select');
   if(sel) sel.addEventListener('change', ()=> updateProject(p.id, { status: sel.value }));
+
+  document.querySelectorAll('[data-pd-member-role]').forEach(s=>s.addEventListener('change',()=> updateMemberRole(p.id, s.dataset.pdMemberRole, s.value)));
+  document.querySelectorAll('[data-pd-approve-admin]').forEach(b=>b.addEventListener('click',()=> approveProjectAdmin(p.id, b.dataset.pdApproveAdmin)));
+  document.querySelectorAll('[data-pd-remove]').forEach(b=>b.addEventListener('click',()=>{
+    const pr = profileById(b.dataset.pdRemove);
+    askConfirm(`Loại "${pr?pr.full_name:''}" khỏi dự án? Lịch sử công việc của người này vẫn được giữ lại để tra cứu.`, ()=>softRemoveMember(p.id, b.dataset.pdRemove));
+  }));
+  document.querySelectorAll('[data-pd-restore]').forEach(b=>b.addEventListener('click',()=> restoreMember(p.id, b.dataset.pdRestore)));
+  const addBtn = document.getElementById('pd-add-member-btn');
+  if(addBtn) addBtn.addEventListener('click',()=>{
+    const uSel=document.getElementById('pd-add-member-select'), rSel=document.getElementById('pd-add-member-role');
+    if(uSel.value) addMember(p.id, uSel.value, rSel.value);
+  });
+
   if(State.projectTab==='list') bindTaskList(p);
   if(State.projectTab==='kanban') bindKanban(p);
   if(State.projectTab==='gantt') bindGantt(p);
@@ -713,22 +818,26 @@ function renderTaskRow(t, projectId, depth){
   const expanded = !!State.expanded[t.id];
   const assignee = profileById(t.assignee_id);
   const sMeta = TASK_STATUS[t.status];
-  const glow = isDueSoon(t) ? 'due-soon' : (isOverdue(t) ? 'overdue-glow' : '');
+  const overdue = isOverdue(t);
+  const glow = isDueSoon(t) ? 'due-soon' : (overdue ? 'overdue-glow' : '');
   const editable = canEdit(projectId);
+  const locked = t.approval_status==='approved';
+  const canDelete = editable && (!locked || isGlobalAdmin());
   return `
   <div class="task-row ${glow}" style="padding-left:${12+depth*22}px;">
     ${hasKids ? `<button class="expand-btn" data-expand="${t.id}">${expanded?'&#9660;':'&#9654;'}</button>` : `<span style="width:18px;display:inline-block;"></span>`}
     <div class="task-title-wrap" data-open-task="${t.id}">
-      <div class="task-title">${escapeHtml(t.title)}</div>
+      <div class="task-title">${locked?'&#128274; ':''}${escapeHtml(t.title)}</div>
       ${hasKids ? `<div class="task-sub-of">${kids.length} công việc con</div>` : ''}
     </div>
     <div class="task-side">
+      ${overdue ? `<span class="overdue-tag">&#9888; Trễ hạn</span>` : ''}
       <span class="badge" style="background:${sMeta.color}18;color:${sMeta.color}"><span class="dot" style="background:${sMeta.color}"></span>${sMeta.label}</span>
       ${t.approval_status!=='not_required' ? `<span class="badge" style="background:${APPROVAL[t.approval_status].color}18;color:${APPROVAL[t.approval_status].color}">${APPROVAL[t.approval_status].label}</span>` : ''}
       ${assignee ? `<span class="task-assignee"><div class="avatar" style="width:20px;height:20px;font-size:9px;background:${avatarColor(assignee.id)}">${initials(assignee.full_name)}</div>${escapeHtml(assignee.full_name.split(' ').pop())}</span>` : ''}
       ${taskDueBadge(t)}
-      ${editable ? `<button class="icon-btn" data-add-sub="${t.id}" title="Thêm công việc con">&#43;</button>` : ''}
-      ${editable ? `<button class="icon-btn" data-delete-task="${t.id}" title="Xoá">&#128465;</button>` : ''}
+      ${editable && !locked ? `<button class="icon-btn" data-add-sub="${t.id}" title="Thêm công việc con">&#43;</button>` : ''}
+      ${canDelete ? `<button class="icon-btn" data-delete-task="${t.id}" title="Xoá">&#128465;</button>` : ''}
     </div>
   </div>
   ${expanded ? kids.map(k=>renderTaskRow(k, projectId, depth+1)).join('') : ''}
@@ -767,10 +876,13 @@ function viewKanban(p){
         ${items.map(t=>{
           const parent = t.parent_task_id ? taskById(t.parent_task_id) : null;
           const assignee = profileById(t.assignee_id);
-          const glow = isDueSoon(t)?'due-soon':(isOverdue(t)?'overdue-glow':'');
-          return `<div class="kanban-card ${glow}" draggable="true" data-card="${t.id}">
+          const overdue = isOverdue(t);
+          const glow = isDueSoon(t)?'due-soon':(overdue?'overdue-glow':'');
+          const locked = t.approval_status==='approved';
+          return `<div class="kanban-card ${glow}" draggable="true" data-card="${t.id}" data-locked="${locked}">
             ${parent ? `<div class="task-sub-of" style="margin-bottom:4px;">&#8618; ${escapeHtml(parent.title)}</div>` : ''}
-            <div class="kanban-card-title">${escapeHtml(t.title)}</div>
+            ${overdue ? `<div style="margin-bottom:5px;"><span class="overdue-tag">&#9888; Trễ hạn</span></div>` : ''}
+            <div class="kanban-card-title">${locked?'&#128274; ':''}${escapeHtml(t.title)}</div>
             <div class="kanban-card-foot">
               ${assignee ? `<div class="avatar" style="width:20px;height:20px;font-size:9px;background:${avatarColor(assignee.id)}" title="${escapeHtml(assignee.full_name)}">${initials(assignee.full_name)}</div>` : '<span></span>'}
               ${taskDueBadge(t)}
@@ -794,6 +906,8 @@ function bindKanban(p){
       e.preventDefault(); col.classList.remove('drag-over');
       const taskId = e.dataTransfer.getData('text/plain');
       if(!editable){ toast('Bạn không có quyền chỉnh sửa dự án này', true); return; }
+      const t = taskById(taskId);
+      if(t && t.approval_status==='approved'){ toast('Công việc đã khoá do đã phê duyệt', true); return; }
       updateTask(taskId, { status: col.dataset.col });
     });
   });
@@ -837,14 +951,15 @@ function ganttBarRow(t, p, range, depth){
   const start = t.start_date ? parseDate(t.start_date) : (t.due_date ? (()=>{ const d=parseDate(t.due_date); d.setDate(d.getDate()-3); return d; })() : null);
   const end = t.due_date ? parseDate(t.due_date) : start;
   const meta = TASK_STATUS[t.status];
+  const overdue = isOverdue(t);
   let barHtml = '';
   if(start && end){
     const left = pctOf(start, range);
     const width = Math.max(1, pctOf(end, range) - left);
-    barHtml = `<div class="gantt-bar" style="left:${left}%;width:${width}%;background:${meta.fill};" data-open-task="${t.id}" title="${escapeHtml(t.title)}">${escapeHtml(t.title)}</div>`;
+    barHtml = `<div class="gantt-bar ${overdue?'overdue-glow':''}" style="left:${left}%;width:${width}%;background:${meta.fill};" data-open-task="${t.id}" title="${escapeHtml(t.title)}${overdue?' — TRỄ HẠN':''}">${overdue?'&#9888; ':''}${escapeHtml(t.title)}</div>`;
   }
   let rows = `<div class="gantt-row">
-    <div class="gantt-row-label ${depth>0?'sub':''}" style="padding-left:${10+depth*16}px;">${escapeHtml(t.title)}</div>
+    <div class="gantt-row-label ${depth>0?'sub':''}" style="padding-left:${10+depth*16}px;${overdue?'color:var(--critical);font-weight:800;':''}">${overdue?'&#9888; ':''}${escapeHtml(t.title)}</div>
     <div class="gantt-track">${barHtml}</div>
   </div>`;
   kids.forEach(k=> rows += ganttBarRow(k, p, range, depth+1));
@@ -869,13 +984,86 @@ function bindGantt(p){
 }
 
 /* ---------------------------------- Stats ------------------------------------- */
+// Weekly cumulative "planned vs actual" buckets for the trend chart. There is no
+// historical snapshot table, so this approximates: "planned" = tasks whose due_date
+// had passed by that week; "actual" = tasks marked done/completed whose updated_at
+// (proxy for completion date) fell on/before that week.
+function trendBuckets(tasks){
+  const today = parseDate(todayStr());
+  let minDate = new Date(today);
+  tasks.forEach(t=>{
+    const sd = t.start_date ? parseDate(t.start_date) : (t.created_at ? new Date(t.created_at) : null);
+    if(sd && sd < minDate) minDate = sd;
+  });
+  const maxBack = new Date(today); maxBack.setDate(maxBack.getDate()-7*7);
+  if(minDate < maxBack) minDate = maxBack;
+  const start = new Date(minDate.getFullYear(), minDate.getMonth(), minDate.getDate());
+  const dow = (start.getDay()+6)%7; // Monday-aligned
+  start.setDate(start.getDate()-dow);
+  const buckets = [];
+  let cur = new Date(start);
+  while(cur <= today){ buckets.push(new Date(cur)); cur = new Date(cur.getFullYear(),cur.getMonth(),cur.getDate()+7); }
+  if(!buckets.length || daysBetween(buckets[buckets.length-1], today)!==0) buckets.push(new Date(today));
+  const capped = buckets.slice(-8);
+  return capped.map(d=>{
+    const dateStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    const planned = tasks.filter(t=>t.due_date && t.due_date<=dateStr).length;
+    const actual = tasks.filter(t=> isDoneItem(t) && t.updated_at && t.updated_at.slice(0,10)<=dateStr).length;
+    return { date:d, dateStr, planned, actual };
+  });
+}
+function renderTrendChart(buckets){
+  if(buckets.length<2) return `<div class="empty-hint">Chưa đủ dữ liệu để vẽ biểu đồ xu hướng.</div>`;
+  const W=680,H=220,padL=30,padR=44,padT=14,padB=26;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const maxVal = Math.max(1, ...buckets.map(b=>Math.max(b.planned,b.actual)));
+  const niceMax = Math.max(5, Math.ceil(maxVal/5)*5);
+  const n = buckets.length;
+  const xStep = n>1 ? plotW/(n-1) : 0;
+  const xAt = i => padL + i*xStep;
+  const yAt = v => padT + plotH - (v/niceMax)*plotH;
+  const gridlines = [0,0.25,0.5,0.75,1].map(f=>{
+    const y = padT + plotH*(1-f); const val = Math.round(niceMax*f);
+    return `<line x1="${padL}" x2="${W-padR}" y1="${y}" y2="${y}" stroke="var(--grid)" stroke-width="1"/><text x="${padL-8}" y="${y+4}" font-size="10" fill="var(--muted)" text-anchor="end">${val}</text>`;
+  }).join('');
+  const plannedPts = buckets.map((b,i)=>`${xAt(i)},${yAt(b.planned)}`).join(' ');
+  const actualPts = buckets.map((b,i)=>`${xAt(i)},${yAt(b.actual)}`).join(' ');
+  const areaPts = `${xAt(0)},${yAt(0)} ${actualPts} ${xAt(n-1)},${yAt(0)}`;
+  const showEvery = Math.max(1, Math.ceil(n/7));
+  const xLabels = buckets.map((b,i)=> (i%showEvery===0 || i===n-1) ? `<text x="${xAt(i)}" y="${H-8}" font-size="10" fill="var(--muted)" text-anchor="middle">${pad(b.date.getDate())}/${pad(b.date.getMonth()+1)}</text>` : '').join('');
+  const li = n-1;
+  let yPlanned = yAt(buckets[li].planned), yActual = yAt(buckets[li].actual);
+  if(Math.abs(yPlanned-yActual) < 12){ if(yPlanned<=yActual){ yPlanned-=7; yActual+=7; } else { yPlanned+=7; yActual-=7; } }
+  return `
+  <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:220px;display:block;" role="img" aria-label="Biểu đồ xu hướng tiến độ theo thời gian">
+    ${gridlines}
+    <polygon points="${areaPts}" fill="var(--good)" opacity="0.10"/>
+    <polyline points="${plannedPts}" fill="none" stroke="var(--blue)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <polyline points="${actualPts}" fill="none" stroke="var(--good)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${xAt(li)}" cy="${yAt(buckets[li].planned)}" r="4" fill="var(--blue)" stroke="var(--surface)" stroke-width="2"/>
+    <circle cx="${xAt(li)}" cy="${yAt(buckets[li].actual)}" r="4" fill="var(--good)" stroke="var(--surface)" stroke-width="2"/>
+    <text x="${xAt(li)+8}" y="${yPlanned+4}" font-size="11" font-weight="700" fill="var(--text)">${buckets[li].planned}</text>
+    <text x="${xAt(li)+8}" y="${yActual+4}" font-size="11" font-weight="700" fill="var(--text)">${buckets[li].actual}</text>
+    ${xLabels}
+  </svg>`;
+}
+function statsListRow(p, kind){
+  const st = projectStats(p.id);
+  let meta = '';
+  if(kind==='overdue'){ const d=daysUntil(p.due_date); meta = `<span class="meta" style="color:var(--critical);font-weight:700;">Trễ ${d!==null?Math.abs(d):''} ngày</span>`; }
+  else if(kind==='ontrack'){ meta = `<span class="meta">${p.due_date?('Hạn: '+fmtDate(p.due_date)):'Chưa đặt hạn'}</span>`; }
+  else { meta = `<span class="meta" style="color:var(--good);font-weight:700;">${st.pct}% hoàn thành</span>`; }
+  return `<div class="stats-list-row" data-open-project="${p.id}">
+    <span class="name" title="${escapeHtml(p.name)}">${kind==='overdue'?'&#9888; ':''}${escapeHtml(p.name)}</span>
+    ${meta}
+  </div>`;
+}
 function viewStats(){
   const myProjects = State.projects.filter(p=>myRole(p.id));
   const allTasks = myProjects.flatMap(p=>tasksOfProject(p.id));
   const totalTasks = allTasks.length;
-  const doneTasks = allTasks.filter(t=>t.status==='done').length;
-  const overdue = allTasks.filter(isOverdue).length;
-  const dueSoon = allTasks.filter(isDueSoon).length;
+  const overdueTaskCount = allTasks.filter(isOverdue).length;
+  const dueSoonTaskCount = allTasks.filter(isDueSoon).length;
   const totalFeedback = myProjects.reduce((s,p)=>s+projectStats(p.id).feedback,0);
   const avgPct = myProjects.length ? Math.round(myProjects.reduce((s,p)=>s+projectStats(p.id).pct,0)/myProjects.length) : 0;
 
@@ -891,30 +1079,83 @@ function viewStats(){
     .map(t=>({ t, p: projectById(t.project_id) }))
     .sort((a,b)=> (a.t.due_date||'') < (b.t.due_date||'') ? -1 : 1);
 
+  // c) Explicit grouped project lists — trễ hạn / đúng tiến độ / hoàn thành.
+  const overdueProjects = myProjects.filter(isOverdue).sort((a,b)=> (a.due_date||'') < (b.due_date||'') ? -1 : 1);
+  const completedProjects = myProjects.filter(p=>p.status==='completed');
+  const onTrackProjects = myProjects.filter(p=> p.status!=='completed' && !isOverdue(p))
+    .sort((a,b)=> (a.due_date||'zzzz') < (b.due_date||'zzzz') ? -1 : 1);
+
+  // a) Progress trend over time (burn-up proxy chart).
+  const buckets = trendBuckets(allTasks);
+
+  // d) Feedback / comment stats grouped by task.
+  const feedbackRows = allTasks.map(t=>{
+    const cs = commentsOfTask(t.id);
+    return { t, p: projectById(t.project_id), count: cs.length, last: cs.slice().sort((a,b)=> (a.created_at<b.created_at?-1:1)).slice(-1)[0] };
+  }).filter(r=>r.count>0).sort((a,b)=> b.count-a.count || ((b.last?.created_at||'') < (a.last?.created_at||'') ? -1 : 1));
+
   return `
   <div class="kpi-grid">
     <div class="card kpi-tile"><div class="kpi-label">Tổng số dự án</div><div class="kpi-value">${myProjects.length}</div></div>
     <div class="card kpi-tile"><div class="kpi-label">Tổng công việc</div><div class="kpi-value">${totalTasks}</div></div>
     <div class="card kpi-tile"><div class="kpi-label">Tiến độ trung bình</div><div class="kpi-value good">${avgPct}%</div></div>
-    <div class="card kpi-tile"><div class="kpi-label">Quá hạn</div><div class="kpi-value ${overdue>0?'crit':''}">${overdue}</div></div>
-    <div class="card kpi-tile"><div class="kpi-label">Sắp đến hạn (&le;3 ngày)</div><div class="kpi-value ${dueSoon>0?'warn':''}">${dueSoon}</div></div>
+    <div class="card kpi-tile"><div class="kpi-label">Dự án trễ hạn</div><div class="kpi-value ${overdueProjects.length>0?'crit':''}">${overdueProjects.length}</div></div>
+    <div class="card kpi-tile"><div class="kpi-label">CV quá hạn / sắp đến hạn</div><div class="kpi-value ${overdueTaskCount>0?'crit':(dueSoonTaskCount>0?'warn':'')}">${overdueTaskCount} / ${dueSoonTaskCount}</div></div>
     <div class="card kpi-tile"><div class="kpi-label">Tổng phản hồi</div><div class="kpi-value">${totalFeedback}</div></div>
+  </div>
+
+  <div class="card pad" style="margin-bottom:16px;">
+    <div class="section-title">Xu hướng tiến độ theo thời gian</div>
+    <div class="chart-legend">
+      <span class="key"><span class="line" style="background:var(--blue)"></span>Kế hoạch (theo hạn công việc)</span>
+      <span class="key"><span class="line" style="background:var(--good)"></span>Thực tế hoàn thành</span>
+    </div>
+    ${renderTrendChart(buckets)}
+    <div style="font-size:11px;color:var(--muted);margin-top:6px;">* "Thực tế hoàn thành" tính theo thời điểm công việc được cập nhật sang trạng thái hoàn thành gần nhất (số liệu xấp xỉ vì hệ thống chưa lưu lịch sử thay đổi theo từng ngày).</div>
+  </div>
+
+  <div class="stats-3col" style="margin-bottom:16px;">
+    <div class="card pad">
+      <div class="section-title" style="color:var(--critical);">&#9888; Trễ hạn (${overdueProjects.length})</div>
+      ${overdueProjects.length ? overdueProjects.map(p=>statsListRow(p,'overdue')).join('') : '<div class="empty-hint" style="padding:14px;">Không có dự án nào trễ hạn 🎉</div>'}
+    </div>
+    <div class="card pad">
+      <div class="section-title" style="color:var(--good);">Đúng tiến độ (${onTrackProjects.length})</div>
+      ${onTrackProjects.length ? onTrackProjects.map(p=>statsListRow(p,'ontrack')).join('') : '<div class="empty-hint" style="padding:14px;">Không có dự án nào</div>'}
+    </div>
+    <div class="card pad">
+      <div class="section-title" style="color:var(--blue);">Hoàn thành (${completedProjects.length})</div>
+      ${completedProjects.length ? completedProjects.map(p=>statsListRow(p,'completed')).join('') : '<div class="empty-hint" style="padding:14px;">Chưa có dự án nào hoàn thành</div>'}
+    </div>
+  </div>
+
+  <div class="card pad" style="margin-bottom:16px;">
+    <div class="section-title">Bảng chi tiết từng dự án</div>
+    <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr><th>Dự án</th><th>Trạng thái</th><th>Tiến độ</th><th>Tổng CV</th><th>Hoàn thành</th><th>Quá hạn</th><th>Sắp đến hạn</th><th>Phản hồi</th><th>Hạn chót</th></tr></thead>
+      <tbody>
+        ${myProjects.length ? myProjects.map(p=>{
+          const st=projectStats(p.id); const meta=PROJECT_STATUS[p.status]; const od=isOverdue(p);
+          return `<tr class="${od?'row-overdue':''}" style="cursor:pointer;" data-open-project="${p.id}">
+            <td>${od?'&#9888; ':''}${escapeHtml(p.name)}</td>
+            <td><span class="badge" style="background:${meta.color}18;color:${meta.color};font-size:10.5px;padding:2px 7px;"><span class="dot" style="background:${meta.color}"></span>${meta.label}</span></td>
+            <td class="num">${st.pct}%</td>
+            <td class="num">${st.total}</td>
+            <td class="num">${st.done}</td>
+            <td class="num" style="${st.overdue>0?'color:var(--critical);font-weight:700;':''}">${st.overdue}</td>
+            <td class="num" style="${st.dueSoon>0?'color:var(--warning);font-weight:700;':''}">${st.dueSoon}</td>
+            <td class="num">${st.feedback}</td>
+            <td>${fmtDate(p.due_date)}</td>
+          </tr>`;
+        }).join('') : `<tr><td colspan="9" class="empty-hint">Chưa có dự án</td></tr>`}
+      </tbody>
+    </table>
+    </div>
   </div>
 
   <div class="two-col">
     <div>
-      <div class="card pad" style="margin-bottom:16px;">
-        <div class="section-title">Tiến độ theo từng dự án</div>
-        ${myProjects.map(p=>{
-          const st=projectStats(p.id); const meta=PROJECT_STATUS[p.status];
-          return `<div class="barrow" style="cursor:pointer;" data-open-project="${p.id}">
-            <div class="barrow-label" title="${escapeHtml(p.name)}"><span class="dot" style="background:${meta.color}"></span>${escapeHtml(p.name.length>18?p.name.slice(0,18)+'…':p.name)}</div>
-            <div class="barrow-track"><div class="barrow-fill" style="width:${st.pct}%;background:${meta.color}"></div></div>
-            <div class="barrow-value">${st.pct}%</div>
-          </div>`;
-        }).join('') || '<div class="empty-hint">Chưa có dự án</div>'}
-      </div>
-
       <div class="card pad">
         <div class="section-title">Vướng mắc (bị chặn / quá hạn)</div>
         ${issues.length ? issues.map(({t,p})=>{
@@ -948,43 +1189,96 @@ function viewStats(){
       </div>
     </div>
   </div>
+
+  <div class="card pad" style="margin-top:16px;">
+    <div class="section-title">Thống kê góp ý / phản hồi theo công việc</div>
+    <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr><th>Công việc</th><th>Dự án</th><th>Trạng thái</th><th>Số góp ý</th><th>Góp ý gần nhất</th></tr></thead>
+      <tbody>
+        ${feedbackRows.length ? feedbackRows.map(({t,p,count,last})=>{
+          const sMeta = TASK_STATUS[t.status];
+          return `<tr style="cursor:pointer;" data-open-task-fb="${t.id}">
+            <td>${escapeHtml(t.title)}</td>
+            <td>${escapeHtml(p?p.name:'')}</td>
+            <td><span class="badge" style="background:${sMeta.color}18;color:${sMeta.color};font-size:10.5px;padding:2px 7px;"><span class="dot" style="background:${sMeta.color}"></span>${sMeta.label}</span></td>
+            <td class="num">${count}</td>
+            <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:italic;color:var(--text-2);">${last?('"'+escapeHtml(last.content)+'"'):''}</td>
+          </tr>`;
+        }).join('') : `<tr><td colspan="5" class="empty-hint">Chưa có góp ý / phản hồi nào</td></tr>`}
+      </tbody>
+    </table>
+    </div>
+  </div>
   `;
 }
 function bindStats(){
   document.querySelectorAll('[data-open-project]').forEach(el=>el.addEventListener('click',()=>{ State.projectId=el.dataset.openProject; State.projectTab='list'; State.view='project'; render(); }));
+  document.querySelectorAll('[data-open-task-fb]').forEach(el=>el.addEventListener('click',()=>{
+    const t = taskById(el.dataset.openTaskFb); if(!t) return;
+    State.projectId = t.project_id; State.projectTab='list'; State.view='project'; render(); openTask(t.id);
+  }));
 }
 
 /* ---------------------------------- Admin -------------------------------------- */
+function pendingAdminGrants(){
+  return State.allMembers.filter(m=>m.role==='admin' && !m.admin_approved && !m.removed_at);
+}
 function viewAdmin(){
+  const pendingCount = pendingAdminGrants().length;
   return `
   <div class="tabbar">
     <button class="tabbtn ${State.adminTab==='users'?'active':''}" data-atab="users">Người dùng</button>
     <button class="tabbtn ${State.adminTab==='perms'?'active':''}" data-atab="perms">Dự án &amp; phân quyền</button>
+    <button class="tabbtn ${State.adminTab==='approvals'?'active':''}" data-atab="approvals">Phê duyệt quản trị dự án${pendingCount?` (${pendingCount})`:''}</button>
   </div>
-  ${State.adminTab==='users' ? viewAdminUsers() : viewAdminPerms()}
+  ${State.adminTab==='users' ? viewAdminUsers() : State.adminTab==='approvals' ? viewAdminApprovals() : viewAdminPerms()}
   `;
 }
 function viewAdminUsers(){
+  // The global Administrator is intentionally never listed here — see project rules.
+  const list = State.profiles.filter(pr=>!pr.is_admin);
   return `<div class="card pad">
-    <div class="section-title">Toàn bộ người dùng (${State.profiles.length})</div>
-    ${State.profiles.map(pr=>`
+    <div class="section-title">Toàn bộ người dùng (${list.length})</div>
+    ${list.map(pr=>`
       <div class="members-row">
         <div class="avatar" style="width:28px;height:28px;font-size:11px;background:${avatarColor(pr.id)}">${initials(pr.full_name)}</div>
         <div style="flex:1;min-width:0;">
-          <div class="name">${escapeHtml(pr.full_name)}</div>
+          <div class="name" style="${pr.disabled?'color:var(--critical);text-decoration:line-through;':''}">${escapeHtml(pr.full_name)}</div>
           <div class="email">${escapeHtml(pr.email)}</div>
         </div>
-        <span style="font-size:11.5px;color:var(--muted);">Quản trị viên</span>
-        <button class="toggle ${pr.is_admin?'on':''}" data-toggle-admin="${pr.id}" ${pr.id===State.profile.id?'disabled title="Không thể tự thu hồi quyền của chính mình"':''}><span class="knob"></span></button>
+        ${pr.disabled ? `<span class="badge" style="font-size:10px;background:#d03b3b18;color:var(--critical);">Đã vô hiệu hoá</span>` : ''}
+        <span style="font-size:11px;color:var(--muted);">Vô hiệu hoá</span>
+        <button class="toggle ${pr.disabled?'on':''}" style="background:${pr.disabled?'var(--critical)':''}" data-toggle-disabled="${pr.id}"><span class="knob"></span></button>
+        <span style="font-size:11px;color:var(--muted);margin-left:8px;">Quản trị hệ thống</span>
+        <button class="toggle ${pr.is_admin?'on':''}" data-toggle-admin="${pr.id}"><span class="knob"></span></button>
       </div>
-    `).join('')}
+    `).join('') || '<div class="empty-hint">Chưa có người dùng nào khác.</div>'}
+  </div>`;
+}
+function viewAdminApprovals(){
+  const grants = pendingAdminGrants();
+  return `<div class="card pad">
+    <div class="section-title">Yêu cầu quyền Quản trị dự án đang chờ phê duyệt (${grants.length})</div>
+    <p style="font-size:12.5px;color:var(--text-2);margin-top:-4px;">Khi một dự án được tạo hoặc một thành viên được đặt làm Quản trị dự án (không phải bởi Administrator), quyền đó cần được Administrator phê duyệt trước khi có hiệu lực đầy đủ. Trong lúc chờ, người đó chỉ có quyền như Biên tập viên.</p>
+    ${grants.map(m=>{ const pr=profileById(m.user_id); const proj=projectById(m.project_id); return `
+      <div class="members-row">
+        <div class="avatar" style="width:28px;height:28px;font-size:11px;background:${avatarColor(m.user_id)}">${initials(pr?pr.full_name:'?')}</div>
+        <div style="flex:1;min-width:0;">
+          <div class="name">${escapeHtml(pr?pr.full_name:'—')}</div>
+          <div class="email">${escapeHtml(proj?proj.name:'')}</div>
+        </div>
+        <button class="btn btn-sm" style="color:var(--good);border-color:var(--good);" data-appr-approve="${m.project_id}|${m.user_id}">Duyệt</button>
+        <button class="btn btn-sm" style="color:var(--critical);border-color:var(--critical);" data-appr-reject="${m.project_id}|${m.user_id}">Từ chối</button>
+      </div>`; }).join('') || '<div class="empty-hint">Không có yêu cầu nào đang chờ.</div>'}
   </div>`;
 }
 function viewAdminPerms(){
   const selected = State.adminSelectedProject || (State.projects[0] && State.projects[0].id);
-  const members = selected ? membersOfProject(selected) : [];
-  const memberIds = new Set(members.map(m=>m.user_id));
-  const nonMembers = State.profiles.filter(pr=>!memberIds.has(pr.id));
+  const active = selected ? visibleMembers(selected) : [];
+  const removed = selected ? removedMembers(selected) : [];
+  const memberIds = new Set(selected ? membersOfProject(selected).map(m=>m.user_id) : []);
+  const nonMembers = State.profiles.filter(pr=>!pr.is_admin && !memberIds.has(pr.id));
   return `<div class="two-col">
     <div class="card pad">
       <div class="section-title">Chọn dự án</div>
@@ -992,17 +1286,25 @@ function viewAdminPerms(){
         ${State.projects.map(p=>`<option value="${p.id}" ${selected===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}
       </select>
       <div class="modal-sec-title">Thành viên &amp; quyền</div>
-      ${members.map(m=>{ const pr=profileById(m.user_id); return `
+      ${active.map(m=>{ const pr=profileById(m.user_id); const isPendingAdmin = m.role==='admin' && !m.admin_approved; return `
         <div class="members-row">
           <div class="avatar" style="width:28px;height:28px;font-size:11px;background:${avatarColor(m.user_id)}">${initials(pr?pr.full_name:'?')}</div>
           <div style="flex:1;min-width:0;"><div class="name">${escapeHtml(pr?pr.full_name:'—')}</div><div class="email">${escapeHtml(pr?pr.email:'')}</div></div>
+          ${isPendingAdmin ? `<span class="badge" style="font-size:10px;background:#fab21922;color:#8a6300;">Chờ duyệt</span><button class="btn btn-sm" style="padding:2px 7px;font-size:10px;" data-appr-approve="${selected}|${m.user_id}">Duyệt</button>` : ''}
           <select class="role-select" data-member-role="${m.user_id}">
             <option value="admin" ${m.role==='admin'?'selected':''}>Quản trị</option>
             <option value="editor" ${m.role==='editor'?'selected':''}>Biên tập</option>
+            <option value="approver" ${m.role==='approver'?'selected':''}>Phê duyệt</option>
             <option value="viewer" ${m.role==='viewer'?'selected':''}>Chỉ xem</option>
           </select>
-          <button class="icon-btn" data-remove-member="${m.user_id}" title="Xoá khỏi dự án">&#128465;</button>
+          <button class="icon-btn" data-remove-member="${m.user_id}" title="Loại khỏi dự án">&#128465;</button>
         </div>`; }).join('') || '<div class="empty-hint">Chưa có thành viên</div>'}
+      ${removed.length ? `<div class="modal-sec-title">Đã rời dự án</div>${removed.map(m=>{ const pr=profileById(m.user_id); return `
+        <div class="members-row">
+          <div class="avatar" style="width:28px;height:28px;font-size:11px;background:var(--muted);">${initials(pr?pr.full_name:'?')}</div>
+          <div style="flex:1;min-width:0;"><div class="name" style="color:var(--critical);text-decoration:line-through;">${escapeHtml(pr?pr.full_name:'—')}</div><div class="email">Dừng: ${fmtDateTime(m.removed_at)}</div></div>
+          <button class="btn btn-sm" data-restore-member="${m.user_id}">Khôi phục</button>
+        </div>`; }).join('')}` : ''}
 
       <div class="modal-sec-title">Thêm thành viên</div>
       <div style="display:flex;gap:8px;">
@@ -1012,6 +1314,7 @@ function viewAdminPerms(){
         <select id="add-member-role" style="width:120px;">
           <option value="viewer">Xem</option>
           <option value="editor">Biên tập</option>
+          <option value="approver">Phê duyệt</option>
           <option value="admin">Quản trị</option>
         </select>
         <button class="btn btn-primary btn-sm" id="add-member-btn" ${!nonMembers.length?'disabled':''}>Thêm</button>
@@ -1028,14 +1331,24 @@ function bindAdmin(){
   document.querySelectorAll('[data-atab]').forEach(b=>b.addEventListener('click',()=>{ State.adminTab=b.dataset.atab; render(); }));
   if(State.adminTab==='users'){
     document.querySelectorAll('[data-toggle-admin]').forEach(b=>b.addEventListener('click',()=>{
-      const id=b.dataset.toggleAdmin; const pr=profileById(id); toggleAdmin(id, !pr.is_admin);
+      const id=b.dataset.toggleAdmin; const pr=profileById(id);
+      askConfirm(`Cấp quyền Administrator (toàn quyền hệ thống) cho "${pr.full_name}"?`, ()=>toggleAdmin(id, !pr.is_admin));
     }));
+    document.querySelectorAll('[data-toggle-disabled]').forEach(b=>b.addEventListener('click',()=>{
+      const id=b.dataset.toggleDisabled; const pr=profileById(id); setUserDisabled(id, !pr.disabled);
+    }));
+  }
+  if(State.adminTab==='approvals'){
+    document.querySelectorAll('[data-appr-approve]').forEach(b=>b.addEventListener('click',()=>{ const [pid,uid]=b.dataset.apprApprove.split('|'); approveProjectAdmin(pid,uid); }));
+    document.querySelectorAll('[data-appr-reject]').forEach(b=>b.addEventListener('click',()=>{ const [pid,uid]=b.dataset.apprReject.split('|'); askConfirm('Từ chối quyền Quản trị dự án? Người này sẽ được hạ xuống Biên tập viên.', ()=>rejectProjectAdmin(pid,uid)); }));
   }
   if(State.adminTab==='perms'){
     const sel = document.getElementById('admin-project-select');
     if(sel){ State.adminSelectedProject = sel.value; sel.addEventListener('change',()=>{ State.adminSelectedProject=sel.value; render(); }); }
     document.querySelectorAll('[data-member-role]').forEach(s=>s.addEventListener('change',()=> updateMemberRole(State.adminSelectedProject, s.dataset.memberRole, s.value)));
-    document.querySelectorAll('[data-remove-member]').forEach(b=>b.addEventListener('click',()=> askConfirm('Xoá thành viên này khỏi dự án?', ()=>removeMember(State.adminSelectedProject, b.dataset.removeMember))));
+    document.querySelectorAll('[data-appr-approve]').forEach(b=>b.addEventListener('click',()=>{ const [pid,uid]=b.dataset.apprApprove.split('|'); approveProjectAdmin(pid,uid); }));
+    document.querySelectorAll('[data-remove-member]').forEach(b=>b.addEventListener('click',()=> askConfirm('Loại thành viên này khỏi dự án? Lịch sử công việc vẫn được giữ lại.', ()=>softRemoveMember(State.adminSelectedProject, b.dataset.removeMember))));
+    document.querySelectorAll('[data-restore-member]').forEach(b=>b.addEventListener('click',()=> restoreMember(State.adminSelectedProject, b.dataset.restoreMember)));
     const addBtn = document.getElementById('add-member-btn');
     if(addBtn) addBtn.addEventListener('click',()=>{
       const uSel=document.getElementById('add-member-select'), rSel=document.getElementById('add-member-role');
@@ -1053,8 +1366,14 @@ function viewTaskModal(){
   const t = taskById(State.openTaskId);
   if(!t) return '';
   const p = projectById(t.project_id);
-  const editable = canEdit(p.id);
-  const members = membersOfProject(p.id);
+  const locked = t.approval_status==='approved';
+  const baseEditable = canEdit(p.id);
+  const contentEditable = baseEditable && !locked;
+  const datesEditable = canEditDates(p.id) && !locked;
+  const showApprove = canApprove(p.id);
+  const canDeleteTask = baseEditable && (!locked || isGlobalAdmin());
+  const showSave = contentEditable || datesEditable;
+  const members = visibleMembers(p.id);
   const comments = commentsOfTask(t.id);
   const parent = t.parent_task_id ? taskById(t.parent_task_id) : null;
   const kids = childTasks(t.id);
@@ -1062,62 +1381,65 @@ function viewTaskModal(){
     <div class="card modal">
       <div class="modal-head">
         <div>
-          <h2>${parent ? `<span style="color:var(--muted);font-weight:500;">${escapeHtml(parent.title)} &rsaquo;</span> ` : ''}${escapeHtml(t.title)}</h2>
+          <h2>${locked?'&#128274; ':''}${parent ? `<span style="color:var(--muted);font-weight:500;">${escapeHtml(parent.title)} &rsaquo;</span> ` : ''}${escapeHtml(t.title)}</h2>
           <div class="crumb" style="font-size:11.5px;color:var(--muted);">${escapeHtml(p.name)}</div>
         </div>
         <button class="modal-close" id="close-task-modal">&times;</button>
       </div>
+      ${locked ? `<div class="err-box" style="background:#0ca30c12;border-color:#0ca30c44;color:var(--good);">Công việc này đã được phê duyệt và <b>khoá cứng</b> — không thể chỉnh sửa nội dung cho đến khi được mở khoá (huỷ phê duyệt).</div>` : ''}
+      ${!locked && !baseEditable ? `<div class="err-box" style="background:var(--page);border-color:var(--border);color:var(--text-2);">Bạn chỉ có quyền xem công việc này.</div>` : ''}
 
       <div class="field">
         <label class="field-label">Tên công việc</label>
-        <input type="text" id="tm-title" value="${escapeHtml(t.title)}" ${editable?'':'disabled'}>
+        <input type="text" id="tm-title" value="${escapeHtml(t.title)}" ${contentEditable?'':'disabled'}>
       </div>
       <div class="field">
         <label class="field-label">Mô tả chi tiết</label>
-        <textarea id="tm-desc" rows="3" ${editable?'':'disabled'}>${escapeHtml(t.description||'')}</textarea>
+        <textarea id="tm-desc" rows="3" ${contentEditable?'':'disabled'}>${escapeHtml(t.description||'')}</textarea>
       </div>
       <div class="field-row">
         <div class="field">
           <label class="field-label">Người phụ trách chính</label>
-          <select id="tm-assignee" ${editable?'':'disabled'}>
+          <select id="tm-assignee" ${contentEditable?'':'disabled'}>
             <option value="">— Chưa gán —</option>
             ${members.map(m=>{ const pr=profileById(m.user_id); return `<option value="${m.user_id}" ${t.assignee_id===m.user_id?'selected':''}>${escapeHtml(pr?pr.full_name:'')}</option>`; }).join('')}
           </select>
         </div>
         <div class="field">
           <label class="field-label">Trạng thái</label>
-          <select id="tm-status" ${editable?'':'disabled'}>${Object.entries(TASK_STATUS).map(([k,v])=>`<option value="${k}" ${t.status===k?'selected':''}>${v.label}</option>`).join('')}</select>
+          <select id="tm-status" ${contentEditable?'':'disabled'}>${Object.entries(TASK_STATUS).map(([k,v])=>`<option value="${k}" ${t.status===k?'selected':''}>${v.label}</option>`).join('')}</select>
         </div>
       </div>
       <div class="field-row">
         <div class="field">
           <label class="field-label">Ngày bắt đầu</label>
-          <input type="date" id="tm-start" value="${t.start_date||''}" ${editable?'':'disabled'}>
+          <input type="date" id="tm-start" value="${t.start_date||''}" ${datesEditable?'':'disabled'}>
         </div>
         <div class="field">
           <label class="field-label">Thời gian hoàn thành (hạn)</label>
-          <input type="date" id="tm-due" value="${t.due_date||''}" ${editable?'':'disabled'}>
+          <input type="date" id="tm-due" value="${t.due_date||''}" ${datesEditable?'':'disabled'}>
         </div>
       </div>
+      ${!datesEditable && !locked ? `<div style="font-size:11.5px;color:var(--muted);margin:-8px 0 14px;">Chỉ Quản trị dự án mới chỉnh được thời gian sau khi đã lưu. Muốn đổi ngày, hãy báo Quản trị dự án.</div>` : ''}
       <div class="field-row">
         <div class="field">
           <label class="field-label">Mức ưu tiên</label>
-          <select id="tm-priority" ${editable?'':'disabled'}>${Object.entries(PRIORITY).map(([k,v])=>`<option value="${k}" ${t.priority===k?'selected':''}>${v.label}</option>`).join('')}</select>
+          <select id="tm-priority" ${contentEditable?'':'disabled'}>${Object.entries(PRIORITY).map(([k,v])=>`<option value="${k}" ${t.priority===k?'selected':''}>${v.label}</option>`).join('')}</select>
         </div>
         <div class="field">
           <label class="field-label">Phê duyệt</label>
-          <div style="display:flex;gap:6px;align-items:center;">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
             <span class="badge" style="background:${APPROVAL[t.approval_status].color}18;color:${APPROVAL[t.approval_status].color}">${APPROVAL[t.approval_status].label}</span>
-            ${editable ? `
-              <button class="btn btn-sm" data-approve="approved" style="color:var(--good);border-color:var(--good);">Duyệt</button>
+            ${showApprove ? `
+              <button class="btn btn-sm" data-approve="approved" style="color:var(--good);border-color:var(--good);" ${locked?'disabled':''}>Duyệt</button>
               <button class="btn btn-sm" data-approve="rejected" style="color:var(--critical);border-color:var(--critical);">Từ chối</button>
               <button class="btn btn-sm" data-approve="pending">Chờ duyệt</button>
-            ` : ''}
+            ` : `<span style="font-size:11px;color:var(--muted);">Chỉ quyền Phê duyệt (Tổng Giám Đốc) hoặc Administrator</span>`}
           </div>
         </div>
       </div>
 
-      ${kids.length ? `<div class="modal-sec-title">Công việc con (${kids.length})</div>${kids.map(k=>`<div class="task-row" style="padding:8px 0;" data-open-task="${k.id}"><span style="flex:1;font-size:13px;cursor:pointer;">${escapeHtml(k.title)}</span><span class="badge" style="background:${TASK_STATUS[k.status].color}18;color:${TASK_STATUS[k.status].color}">${TASK_STATUS[k.status].label}</span></div>`).join('')}` : ''}
+      ${kids.length ? `<div class="modal-sec-title">Công việc con (${kids.length})</div>${kids.map(k=>`<div class="task-row" style="padding:8px 0;" data-open-task="${k.id}"><span style="flex:1;font-size:13px;cursor:pointer;">${k.approval_status==='approved'?'&#128274; ':''}${escapeHtml(k.title)}</span><span class="badge" style="background:${TASK_STATUS[k.status].color}18;color:${TASK_STATUS[k.status].color}">${TASK_STATUS[k.status].label}</span></div>`).join('')}` : ''}
 
       <div class="modal-sec-title">Ý kiến phản hồi (${comments.length})</div>
       <div style="max-height:220px;overflow-y:auto;">
@@ -1134,10 +1456,10 @@ function viewTaskModal(){
       </div>
 
       <div class="modal-actions">
-        ${editable ? `<button class="btn btn-danger" id="tm-delete">Xoá công việc</button>` : ''}
+        ${canDeleteTask ? `<button class="btn btn-danger" id="tm-delete">Xoá công việc</button>` : ''}
         <div class="spacer"></div>
         <button class="btn" id="tm-cancel">Đóng</button>
-        ${editable ? `<button class="btn btn-primary" id="tm-save">Lưu thay đổi</button>` : ''}
+        ${showSave ? `<button class="btn btn-primary" id="tm-save">Lưu thay đổi</button>` : ''}
       </div>
     </div>
   </div>`;
@@ -1232,7 +1554,7 @@ function bindNewProjectModal(){
 function viewNewTaskModal(){
   const { projectId, parentId } = State.showNewTask;
   const p = projectById(projectId);
-  const members = membersOfProject(projectId);
+  const members = visibleMembers(projectId);
   const parent = parentId ? taskById(parentId) : null;
   return `<div class="overlay" id="nt-overlay">
     <div class="card modal modal-sm">
