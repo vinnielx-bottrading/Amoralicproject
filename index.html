@@ -298,6 +298,9 @@
 <div id="toast-root" class="toast-wrap"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<!-- Dùng để xuất báo cáo tổng hợp dự án (Admin -> Xuất báo cáo): SheetJS cho Excel, docx.js cho Word. -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docx@9.7.1/dist/index.iife.min.js"></script>
 <script>
 /* =========================================================================
    PROJECT TRACKER DASHBOARD
@@ -343,6 +346,73 @@ const ROLE_LABELS = {
   viewer:   'Chỉ xem',
   approver: 'Phê duyệt (Tổng Giám Đốc)',
 };
+// Nhật ký hoạt động: icon + màu hiển thị cho từng loại hành động (ghi bởi trigger CSDL, xem pt_activity_log).
+const ACTIVITY_META = {
+  project_created:       { icon:'&#128640;', color:'var(--blue)' },
+  project_updated:       { icon:'&#9998;',   color:'var(--blue)' },
+  task_created:          { icon:'&#43;',     color:'var(--good)' },
+  task_updated:          { icon:'&#9998;',   color:'var(--muted)' },
+  task_deleted:          { icon:'&#128465;', color:'var(--critical)' },
+  task_approved:         { icon:'&#10003;',  color:'var(--good)' },
+  task_rejected:         { icon:'&#10007;',  color:'var(--critical)' },
+  task_pending:          { icon:'&#8987;',   color:'var(--warning)' },
+  member_added:          { icon:'&#128100;', color:'var(--good)' },
+  member_removed:        { icon:'&#128683;', color:'var(--critical)' },
+  member_restored:       { icon:'&#8635;',   color:'var(--blue)' },
+  member_role_changed:   { icon:'&#128272;', color:'var(--muted)' },
+  member_admin_approved: { icon:'&#10003;',  color:'var(--good)' },
+  member_deleted:        { icon:'&#128465;', color:'var(--critical)' },
+  comment_added:         { icon:'&#128172;', color:'var(--blue)' },
+  comment_deleted:       { icon:'&#128465;', color:'var(--critical)' },
+};
+function actorName(id){ if(!id) return 'Hệ thống'; const pr=profileById(id); return pr ? pr.full_name : 'Người dùng đã xoá'; }
+// Diễn giải 1 dòng nhật ký sang câu tiếng Việt dễ đọc, dùng chung cho tab "Nhật ký hoạt động" và báo cáo xuất ra.
+function describeActivity(a){
+  const who = `<b>${escapeHtml(actorName(a.actor_id))}</b>`;
+  const label = escapeHtml(a.entity_label || '');
+  const d = a.detail || {};
+  const fieldLabel = { title:'tên', status:'trạng thái', priority:'mức ưu tiên', assignee_id:'người phụ trách', start_date:'ngày bắt đầu', due_date:'hạn hoàn thành', description:'mô tả', name:'tên dự án' };
+  const fmtVal = (field, v)=>{
+    if(v==null || v==='') return '(trống)';
+    if(field==='status') return (TASK_STATUS[v]||{}).label || v;
+    if(field==='priority') return (PRIORITY[v]||{}).label || v;
+    if(field==='start_date' || field==='due_date') return fmtDate(v);
+    if(field==='assignee_id') return escapeHtml(actorName(v));
+    return escapeHtml(String(v));
+  };
+  switch(a.action){
+    case 'project_created': return `${who} đã tạo dự án <b>${label}</b>`;
+    case 'project_updated': {
+      const parts = Object.keys(d).map(f=> f==='description' ? 'mô tả' : `${fieldLabel[f]||f}: ${fmtVal(f,d[f].from)} &rarr; ${fmtVal(f,d[f].to)}`);
+      return `${who} đã cập nhật dự án (${parts.join('; ')})`;
+    }
+    case 'task_created': return `${who} đã thêm công việc <b>${label}</b>`;
+    case 'task_deleted': return `${who} đã xoá công việc <b>${label}</b>`;
+    case 'task_updated': {
+      const parts = Object.keys(d).map(f=> f==='description' ? 'mô tả' : `${fieldLabel[f]||f}: ${fmtVal(f,d[f].from)} &rarr; ${fmtVal(f,d[f].to)}`);
+      return `${who} đã sửa công việc <b>${label}</b> (${parts.join('; ')})`;
+    }
+    case 'task_approved': return `${who} đã <b>phê duyệt</b> công việc <b>${label}</b>`;
+    case 'task_rejected': return `${who} đã <b>từ chối</b> công việc <b>${label}</b>`;
+    case 'task_pending': return `${who} đã chuyển công việc <b>${label}</b> về trạng thái chờ phê duyệt`;
+    case 'member_added': return `${who} đã thêm <b>${label}</b> vào dự án (${ROLE_LABELS[d.role]||d.role})`;
+    case 'member_removed': return `${who} đã loại <b>${label}</b> khỏi dự án`;
+    case 'member_restored': return `${who} đã khôi phục <b>${label}</b> vào dự án`;
+    case 'member_role_changed': return `${who} đã đổi quyền của <b>${label}</b>: ${ROLE_LABELS[d.from]||d.from} &rarr; ${ROLE_LABELS[d.to]||d.to}`;
+    case 'member_admin_approved': return `${who} đã phê duyệt quyền Quản trị dự án cho <b>${label}</b>`;
+    case 'member_deleted': return `${who} đã xoá vĩnh viễn <b>${label}</b> khỏi dự án`;
+    case 'comment_added': return `${who} đã bình luận trong công việc <b>${escapeHtml((d.task_title)||'')}</b>: "${label}"`;
+    case 'comment_deleted': return `${who} đã xoá bình luận trong công việc <b>${escapeHtml((d.task_title)||'')}</b>: "${label}"`;
+    default: return `${who} — ${escapeHtml(a.action)}: ${label}`;
+  }
+}
+// Bản văn bản thuần (không thẻ HTML) của describeActivity(), dùng khi xuất báo cáo Word/Excel.
+function describeActivityPlain(a){
+  return describeActivity(a)
+    .replace(/<b>|<\/b>/g,'')
+    .replace(/&rarr;/g,'→').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')
+    .replace(/&quot;/g,'"').replace(/&#39;/g,"'");
+}
 
 /* ------------------------------- Utils ---------------------------------- */
 function pad(n){ return n<10 ? '0'+n : ''+n; }
@@ -365,8 +435,8 @@ const State = {
   session:null, profile:null,
   view:'login', authTab:'login',
   projectId:null, projectTab:'list',
-  adminTab:'users', adminSelectedProject:null,
-  projects:[], profiles:[], allTasks:[], allComments:[], allMembers:[],
+  adminTab:'users', adminSelectedProject:null, reportSelectedProject:null,
+  projects:[], profiles:[], allTasks:[], allComments:[], allMembers:[], allActivity:[],
   expanded:{}, // taskId -> bool (tree expand state)
   openTaskId:null, openTaskDraft:null,
   showNewProject:false, showNewTask:null, // {projectId,parentId}
@@ -377,21 +447,24 @@ const State = {
 
 /* ------------------------------ Data layer ------------------------------- */
 async function loadAll(){
-  const [pr, pf, tk, cm, mb] = await Promise.all([
+  const [pr, pf, tk, cm, mb, ac] = await Promise.all([
     sb.from('pt_projects').select('*').order('created_at'),
     sb.from('pt_profiles').select('*').order('full_name'),
     sb.from('pt_tasks').select('*').order('sort_order'),
     sb.from('pt_task_comments').select('*').order('created_at'),
     sb.from('pt_project_members').select('*'),
+    sb.from('pt_activity_log').select('*').order('created_at', { ascending:false }),
   ]);
   State.projects = pr.data || [];
   State.profiles = pf.data || [];
   State.allTasks = tk.data || [];
   State.allComments = cm.data || [];
   State.allMembers = mb.data || [];
+  State.allActivity = ac.data || [];
 }
 
 function profileById(id){ return State.profiles.find(p=>p.id===id); }
+function activityOfProject(pid){ return State.allActivity.filter(a=>a.project_id===pid); } // đã sắp created_at desc từ loadAll()
 function tasksOfProject(pid){ return State.allTasks.filter(t=>t.project_id===pid); }
 function topTasks(pid){ return tasksOfProject(pid).filter(t=>!t.parent_task_id).sort((a,b)=>a.sort_order-b.sort_order); }
 function childTasks(taskId){ return State.allTasks.filter(t=>t.parent_task_id===taskId).sort((a,b)=>a.sort_order-b.sort_order); }
@@ -1016,11 +1089,13 @@ function viewProjectDetail(){
     <button class="tabbtn ${State.projectTab==='list'?'active':''}" data-ptab="list">Danh sách công việc</button>
     <button class="tabbtn ${State.projectTab==='kanban'?'active':''}" data-ptab="kanban">Kanban</button>
     <button class="tabbtn ${State.projectTab==='gantt'?'active':''}" data-ptab="gantt">Gantt</button>
+    <button class="tabbtn ${State.projectTab==='activity'?'active':''}" data-ptab="activity">Nhật ký hoạt động</button>
   </div>
 
   ${State.projectTab==='list' ? viewTaskList(p) : ''}
   ${State.projectTab==='kanban' ? viewKanban(p) : ''}
   ${State.projectTab==='gantt' ? viewGantt(p) : ''}
+  ${State.projectTab==='activity' ? viewActivityFeed(p) : ''}
   `;
 }
 function bindProjectDetail(){
@@ -1236,6 +1311,29 @@ function viewGantt(p){
 }
 function bindGantt(p){
   document.querySelectorAll('[data-open-task]').forEach(el=>el.addEventListener('click',()=>openTask(el.dataset.openTask)));
+}
+
+/* ------------------------------- Nhật ký hoạt động ------------------------------- */
+// Ghi tự động bởi trigger CSDL (pt_activity_log) kể từ khi tính năng này được bật — không thể
+// khôi phục lại các thao tác đã xảy ra trước đó. Đặt ở tab cuối cùng của dự án theo yêu cầu.
+const ACTIVITY_ICON_DEFAULT = { icon:'&#8226;', color:'var(--muted)' };
+function viewActivityFeed(p){
+  const items = activityOfProject(p.id);
+  if(!items.length){
+    return `<div class="card empty-hint">Chưa có nhật ký hoạt động nào được ghi nhận cho dự án này.<br><span style="font-size:11.5px;">Nhật ký chỉ ghi lại các thao tác kể từ khi tính năng này được bật — không có dữ liệu cho các thao tác trước đó.</span></div>`;
+  }
+  return `<div class="card" style="padding:6px 0;">
+    ${items.map(a=>{
+      const meta = ACTIVITY_META[a.action] || ACTIVITY_ICON_DEFAULT;
+      return `<div style="display:flex;gap:12px;padding:10px 16px;border-bottom:1px solid var(--grid);">
+        <div style="width:26px;height:26px;border-radius:50%;flex:0 0 auto;display:flex;align-items:center;justify-content:center;background:${meta.color}18;color:${meta.color};font-size:13px;">${meta.icon}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;line-height:1.5;">${describeActivity(a)}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;">${fmtDateTime(a.created_at)}</div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
 }
 
 /* ---------------------------------- Stats ------------------------------------- */
@@ -1475,6 +1573,162 @@ function bindStats(){
   }));
 }
 
+/* ------------------------------- Xuất báo cáo tổng hợp dự án ------------------------------- */
+const ACTIVITY_ACTION_LABEL = {
+  project_created:'Tạo dự án', project_updated:'Cập nhật dự án',
+  task_created:'Thêm công việc', task_updated:'Sửa công việc', task_deleted:'Xoá công việc',
+  task_approved:'Phê duyệt công việc', task_rejected:'Từ chối công việc', task_pending:'Chờ phê duyệt lại',
+  member_added:'Thêm thành viên', member_removed:'Loại thành viên', member_restored:'Khôi phục thành viên',
+  member_role_changed:'Đổi vai trò', member_admin_approved:'Duyệt quyền quản trị', member_deleted:'Xoá thành viên',
+  comment_added:'Thêm bình luận', comment_deleted:'Xoá bình luận',
+};
+function slugify(s){
+  return (s||'bao-cao').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/gi,'d')
+    .replace(/[^a-zA-Z0-9]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase() || 'bao-cao';
+}
+// Đi qua toàn bộ cây công việc theo đúng thứ tự đã sắp xếp (topTasks/childTasks), gắn nhãn I./1./a.
+function flattenTasksForReport(pid){
+  const out = [];
+  function walk(list, depth){
+    list.forEach((t,i)=>{
+      out.push({ task:t, label: taskOrderLabel(depth, i+1), depth });
+      const kids = childTasks(t.id);
+      if(kids.length) walk(kids, depth+1);
+    });
+  }
+  walk(topTasks(pid), 0);
+  return out;
+}
+// Gom toàn bộ dữ liệu 1 dự án cần cho báo cáo cuối dự án: tổng quan, thành viên, công việc (kèm số
+// thứ tự I/1/a), vấn đề vướng mắc, bình luận/góp ý, và nhật ký hoạt động (nếu có ghi từ trước).
+function buildProjectReportData(pid){
+  const p = projectById(pid);
+  const stats = projectStats(pid);
+  // Administrator không hiển thị trong danh sách thành viên theo quy ước chung của app.
+  const members = membersOfProject(pid).filter(m=>!isAdminProfile(m.user_id)).map(m=>{
+    const pr = profileById(m.user_id);
+    return {
+      name: pr?pr.full_name:'—', email: pr?pr.email:'', role: ROLE_LABELS[m.role]||m.role,
+      status: m.removed_at ? 'Đã rời dự án' : 'Đang tham gia',
+      joined_at: m.added_at, removed_at: m.removed_at,
+    };
+  });
+  const flatTasks = flattenTasksForReport(pid).map(({task:t, label, depth})=>{
+    const assignee = profileById(t.assignee_id);
+    return {
+      label, depth, title: t.title, description: t.description||'',
+      assignee: assignee?assignee.full_name:'— Chưa gán —',
+      status: (TASK_STATUS[t.status]||{}).label || t.status,
+      priority: (PRIORITY[t.priority]||{}).label || t.priority,
+      start_date: fmtDate(t.start_date), due_date: fmtDate(t.due_date),
+      approval: (APPROVAL[t.approval_status]||{}).label || t.approval_status,
+      overdue: isOverdue(t),
+    };
+  });
+  const issues = tasksOfProject(pid).filter(t=>t.status==='blocked').map(t=>{
+    const assignee = profileById(t.assignee_id);
+    return { title:t.title, assignee: assignee?assignee.full_name:'— Chưa gán —', description: t.description||'' };
+  });
+  const comments = tasksOfProject(pid).flatMap(t=> commentsOfTask(t.id).map(c=>{
+    const author = profileById(c.author_id);
+    return { task_title: t.title, author: author?author.full_name:'Ẩn danh', content: c.content, created_at: c.created_at };
+  })).sort((a,b)=> a.created_at<b.created_at?-1:1);
+  const activity = activityOfProject(pid).slice().sort((a,b)=> a.created_at<b.created_at?-1:1); // cũ → mới, để đọc như tường thuật
+  return { project:p, stats, members, flatTasks, issues, comments, activity };
+}
+function exportProjectReportXlsx(pid){
+  if(typeof XLSX==='undefined'){ toast('Không tải được thư viện xuất Excel. Kiểm tra kết nối mạng và thử lại.', true); return; }
+  const data = buildProjectReportData(pid);
+  const p = data.project;
+  const wb = XLSX.utils.book_new();
+
+  const overviewRows = [
+    ['Tên dự án', p.name],
+    ['Mô tả', p.description||''],
+    ['Trạng thái', (PROJECT_STATUS[p.status]||{}).label || p.status],
+    ['Ngày bắt đầu', fmtDate(p.start_date)],
+    ['Hạn hoàn thành', fmtDate(p.due_date)],
+    ['Tổng số công việc', data.stats.total],
+    ['Đã hoàn thành', data.stats.done],
+    ['Trễ hạn', data.stats.overdue],
+    ['Tỷ lệ hoàn thành', data.stats.pct+'%'],
+    ['Ngày xuất báo cáo', fmtDateTime(new Date().toISOString())],
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(overviewRows), 'Tổng quan');
+
+  const memberRows = [['Họ tên','Email','Vai trò','Trạng thái','Ngày tham gia','Ngày rời']]
+    .concat(data.members.map(m=>[m.name, m.email, m.role, m.status, fmtDateTime(m.joined_at), m.removed_at?fmtDateTime(m.removed_at):'']));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(memberRows), 'Thành viên');
+
+  const taskRows = [['STT','Tên công việc','Người phụ trách','Trạng thái','Mức ưu tiên','Ngày bắt đầu','Hạn hoàn thành','Phê duyệt','Trễ hạn?']]
+    .concat(data.flatTasks.map(t=>[t.label, ('  '.repeat(t.depth))+t.title, t.assignee, t.status, t.priority, t.start_date, t.due_date, t.approval, t.overdue?'Có':'']));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(taskRows), 'Công việc');
+
+  const issueRows = [['Công việc','Người phụ trách','Mô tả vấn đề']].concat(data.issues.map(i=>[i.title, i.assignee, i.description]));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(issueRows), 'Vấn đề vướng mắc');
+
+  const commentRows = [['Công việc','Người góp ý','Nội dung','Thời gian']].concat(data.comments.map(c=>[c.task_title, c.author, c.content, fmtDateTime(c.created_at)]));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(commentRows), 'Bình luận & góp ý');
+
+  const activityRows = [['Thời gian','Người thực hiện','Hành động','Chi tiết']]
+    .concat(data.activity.map(a=>[fmtDateTime(a.created_at), actorName(a.actor_id), ACTIVITY_ACTION_LABEL[a.action]||a.action, describeActivityPlain(a)]));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(activityRows), 'Nhật ký hoạt động');
+
+  XLSX.writeFile(wb, `Bao-cao-${slugify(p.name)}.xlsx`);
+}
+async function exportProjectReportDocx(pid){
+  if(typeof docx==='undefined'){ toast('Không tải được thư viện xuất Word. Kiểm tra kết nối mạng và thử lại.', true); return; }
+  const data = buildProjectReportData(pid);
+  const p = data.project;
+  const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, AlignmentType } = docx;
+
+  const h1 = (text)=> new Paragraph({ text, heading: HeadingLevel.HEADING_1, spacing:{before:300, after:150} });
+  const p_ = (text)=> new Paragraph({ children:[new TextRun(String(text))], spacing:{after:80} });
+  const cell = (text, opts={})=> new TableCell({ children:[new Paragraph({ children:[new TextRun({text:String(text==null?'':text), bold:!!opts.bold})] })] });
+  const row = (cells)=> new TableRow({ children: cells });
+  const table = (headerRow, dataRows)=> new Table({
+    width:{size:100, type:WidthType.PERCENTAGE},
+    rows:[ row(headerRow.map(h=>cell(h,{bold:true}))), ...dataRows.map(r=>row(r.map(v=>cell(v)))) ]
+  });
+
+  const children = [];
+  children.push(new Paragraph({ text:'BÁO CÁO TỔNG HỢP DỰ ÁN', heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER }));
+  children.push(new Paragraph({ text:p.name, heading: HeadingLevel.HEADING_1, alignment: AlignmentType.CENTER }));
+  children.push(new Paragraph({ children:[new TextRun(`Xuất ngày ${fmtDateTime(new Date().toISOString())}`)], alignment: AlignmentType.CENTER, spacing:{after:300} }));
+
+  children.push(h1('1. Thông tin tổng quan'));
+  children.push(p_(`Mô tả: ${p.description||'—'}`));
+  children.push(p_(`Trạng thái: ${(PROJECT_STATUS[p.status]||{}).label || p.status}`));
+  children.push(p_(`Thời gian: ${fmtDate(p.start_date)} — ${fmtDate(p.due_date)}`));
+  children.push(p_(`Tiến độ: ${data.stats.pct}% (${data.stats.done}/${data.stats.total} công việc hoàn thành, ${data.stats.overdue} trễ hạn)`));
+
+  children.push(h1('2. Thành viên dự án'));
+  children.push(table(['Họ tên','Vai trò','Trạng thái','Ngày tham gia'], data.members.map(m=>[m.name, m.role, m.status, fmtDateTime(m.joined_at)])));
+
+  children.push(h1('3. Danh sách công việc'));
+  children.push(table(['STT','Tên công việc','Người phụ trách','Trạng thái','Bắt đầu','Hạn'],
+    data.flatTasks.map(t=>[t.label, '  '.repeat(t.depth)+t.title, t.assignee, t.status, t.start_date, t.due_date])));
+
+  children.push(h1('4. Vấn đề vướng mắc'));
+  if(data.issues.length) children.push(table(['Công việc','Người phụ trách','Mô tả'], data.issues.map(i=>[i.title, i.assignee, i.description||'—'])));
+  else children.push(p_('Không có vấn đề vướng mắc nào được ghi nhận.'));
+
+  children.push(h1('5. Phản hồi & góp ý'));
+  if(data.comments.length) data.comments.forEach(c=> children.push(p_(`[${fmtDateTime(c.created_at)}] ${c.author} (${c.task_title}): ${c.content}`)));
+  else children.push(p_('Chưa có phản hồi nào.'));
+
+  children.push(h1('6. Nhật ký hoạt động'));
+  if(data.activity.length) data.activity.forEach(a=> children.push(p_(`[${fmtDateTime(a.created_at)}] ${describeActivityPlain(a)}`)));
+  else children.push(p_('Chưa có nhật ký hoạt động nào được ghi nhận (tính năng ghi nhật ký chỉ áp dụng cho các thao tác từ thời điểm được bật trở đi).'));
+
+  const doc = new Document({ sections:[{ children }] });
+  const blob = await Packer.toBlob(doc);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download = `Bao-cao-${slugify(p.name)}.docx`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+}
+
 /* ---------------------------------- Admin -------------------------------------- */
 function pendingAdminGrants(){
   return State.allMembers.filter(m=>m.role==='admin' && !m.admin_approved && !m.removed_at);
@@ -1491,8 +1745,9 @@ function viewAdmin(){
     <button class="tabbtn ${State.adminTab==='users'?'active':''}" data-atab="users">Quản lý tài khoản${signupCount?` (${signupCount} chờ duyệt)`:''}</button>
     <button class="tabbtn ${State.adminTab==='perms'?'active':''}" data-atab="perms">Dự án &amp; phân quyền</button>
     <button class="tabbtn ${State.adminTab==='approvals'?'active':''}" data-atab="approvals">Phê duyệt quản trị dự án${pendingCount?` (${pendingCount})`:''}</button>
+    <button class="tabbtn ${State.adminTab==='report'?'active':''}" data-atab="report">Xuất báo cáo</button>
   </div>
-  ${State.adminTab==='users' ? viewAdminUsers() : State.adminTab==='approvals' ? viewAdminApprovals() : viewAdminPerms()}
+  ${State.adminTab==='users' ? viewAdminUsers() : State.adminTab==='approvals' ? viewAdminApprovals() : State.adminTab==='report' ? viewAdminReport() : viewAdminPerms()}
   `;
 }
 function viewAdminUsers(){
@@ -1537,6 +1792,34 @@ function viewAdminApprovals(){
         <button class="btn btn-sm" style="color:var(--good);border-color:var(--good);" data-appr-approve="${m.project_id}|${m.user_id}">Duyệt</button>
         <button class="btn btn-sm" style="color:var(--critical);border-color:var(--critical);" data-appr-reject="${m.project_id}|${m.user_id}">Từ chối</button>
       </div>`; }).join('') || '<div class="empty-hint">Không có yêu cầu nào đang chờ.</div>'}
+  </div>`;
+}
+function viewAdminReport(){
+  const selected = State.reportSelectedProject || (State.projects[0] && State.projects[0].id);
+  const p = selected ? projectById(selected) : null;
+  const st = p ? projectStats(p.id) : null;
+  const memberCount = p ? membersOfProject(p.id).filter(m=>!isAdminProfile(m.user_id) && !m.removed_at).length : 0;
+  const activityCount = p ? activityOfProject(p.id).length : 0;
+  return `<div class="card pad">
+    <div class="section-title">Xuất báo cáo tổng hợp dự án</div>
+    <p style="font-size:12.5px;color:var(--text-2);margin-top:-4px;">Chọn 1 dự án để xuất báo cáo đầy đủ: thông tin tổng quan, thành viên, danh sách công việc, vấn đề vướng mắc, bình luận/góp ý và nhật ký hoạt động.</p>
+    <div class="field" style="max-width:420px;">
+      <label class="field-label">Dự án</label>
+      <select id="report-project-select">
+        ${State.projects.map(pr=>`<option value="${pr.id}" ${pr.id===selected?'selected':''}>${escapeHtml(pr.name)}</option>`).join('') || '<option value="">Chưa có dự án nào</option>'}
+      </select>
+    </div>
+    ${p ? `
+    <div style="display:flex;gap:22px;margin:14px 0 18px;font-size:12.5px;color:var(--muted);flex-wrap:wrap;">
+      <div><b style="color:var(--text)">Thành viên:</b> ${memberCount}</div>
+      <div><b style="color:var(--text)">Công việc:</b> ${st.total} (${st.done} hoàn thành, ${st.overdue} trễ hạn)</div>
+      <div><b style="color:var(--text)">Bản ghi nhật ký:</b> ${activityCount}</div>
+    </div>
+    ${!activityCount ? `<div class="draft-hint">Dự án này chưa có bản ghi nhật ký hoạt động nào — báo cáo vẫn xuất bình thường, chỉ riêng phần "Nhật ký hoạt động" sẽ để trống.</div>` : ''}
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn btn-primary" id="report-export-docx">&#128196; Xuất Word (.docx)</button>
+      <button class="btn btn-primary" id="report-export-xlsx">&#128202; Xuất Excel (.xlsx)</button>
+    </div>` : `<div class="empty-hint">Chưa có dự án nào để xuất báo cáo.</div>`}
   </div>`;
 }
 function viewAdminPerms(){
@@ -1632,6 +1915,14 @@ function bindAdmin(){
     if(delBtn) delBtn.addEventListener('click',()=> askConfirm('Xoá vĩnh viễn dự án này cùng toàn bộ dữ liệu liên quan?', ()=>{
       deleteProject(State.adminSelectedProject); State.adminSelectedProject=null;
     }));
+  }
+  if(State.adminTab==='report'){
+    const sel = document.getElementById('report-project-select');
+    if(sel){ State.reportSelectedProject = sel.value; sel.addEventListener('change',()=>{ State.reportSelectedProject=sel.value; render(); }); }
+    const docxBtn = document.getElementById('report-export-docx');
+    if(docxBtn) docxBtn.addEventListener('click', ()=> exportProjectReportDocx(State.reportSelectedProject));
+    const xlsxBtn = document.getElementById('report-export-xlsx');
+    if(xlsxBtn) xlsxBtn.addEventListener('click', ()=> exportProjectReportXlsx(State.reportSelectedProject));
   }
 }
 
