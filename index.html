@@ -184,8 +184,14 @@
   .task-assignee{ display:flex; align-items:center; gap:5px; font-size:12px; color:var(--text-2); }
   .icon-btn{ border:none; background:transparent; color:var(--muted); padding:5px; border-radius:6px; }
   .icon-btn:hover{ background:var(--grid); color:var(--text); }
+  .icon-btn:disabled{ opacity:.3; cursor:default; }
+  .icon-btn:disabled:hover{ background:transparent; color:var(--muted); }
   .add-subtask-row{ padding:8px 12px 8px 44px; }
   .empty-hint{ padding:30px; text-align:center; color:var(--muted); font-size:13px; }
+  .task-order-label{ font-weight:800; color:var(--blue); margin-right:4px; }
+  .task-move-col{ display:flex; flex-direction:column; gap:0; flex:0 0 auto; }
+  .task-move-col .icon-btn{ padding:1px; line-height:1; font-size:11px; }
+  .list-toolbar{ display:flex; justify-content:flex-end; padding:10px 12px; border-bottom:1px solid var(--grid); }
 
   /* ---------- Kanban ---------- */
   .kanban-wrap{ display:flex; gap:14px; overflow-x:auto; padding-bottom:10px; }
@@ -443,13 +449,117 @@ async function createProject(payload){
 async function updateProject(id, patch){ return mutate(sb.from('pt_projects').update(patch).eq('id',id), 'Đã lưu dự án'); }
 async function deleteProject(id){ return mutate(sb.from('pt_projects').delete().eq('id',id), 'Đã xoá dự án'); }
 async function createTask(payload){
-  const { error } = await sb.from('pt_tasks').insert({ ...payload, created_by:State.profile.id });
+  const { data, error } = await sb.from('pt_tasks').insert({ ...payload, created_by:State.profile.id }).select().single();
   if(error){ toast(error.message, true); return false; }
-  await loadAll(); toast('Đã thêm công việc'); render();
+  await loadAll();
+  await repositionTaskByDate(data);
+  await loadAll();
+  toast('Đã thêm công việc'); render();
   return true;
 }
-async function updateTask(id, patch){ return mutate(sb.from('pt_tasks').update(patch).eq('id',id), 'Đã lưu công việc'); }
+async function updateTask(id, patch){
+  const { error } = await sb.from('pt_tasks').update(patch).eq('id', id);
+  if(error){ toast(error.message || 'Có lỗi xảy ra', true); return false; }
+  await loadAll();
+  // Nếu ngày bắt đầu thay đổi, tự động xếp lại vị trí công việc này theo ngày trong nhóm anh em của nó
+  // (không đụng tới thứ tự tương đối mà administrator/quản trị dự án đã sắp xếp thủ công cho các công việc khác).
+  if(Object.prototype.hasOwnProperty.call(patch, 'start_date')){
+    const t = taskById(id);
+    if(t) await repositionTaskByDate(t);
+    await loadAll();
+  }
+  toast('Đã lưu công việc');
+  render();
+  return true;
+}
 async function deleteTask(id){ return mutate(sb.from('pt_tasks').delete().eq('id',id), 'Đã xoá công việc'); }
+
+/* ---------------------- Sắp xếp thứ tự công việc theo ngày ---------------------- */
+// Công việc không có ngày bắt đầu được xếp sau cùng trong nhóm anh em của nó.
+function taskDateSortKey(t){ return t.start_date || '9999-12-31'; }
+// Chèn một công việc (vừa tạo, hoặc vừa đổi ngày bắt đầu) vào đúng vị trí theo ngày trong
+// nhóm anh em (cùng project_id + cùng parent_task_id), không xáo trộn thứ tự tương đối của
+// các công việc còn lại (giữ nguyên các lần move up/down thủ công trước đó).
+async function repositionTaskByDate(task){
+  if(!task) return;
+  const siblings = (task.parent_task_id ? childTasks(task.parent_task_id) : topTasks(task.project_id)).filter(s=>s.id!==task.id);
+  const key = taskDateSortKey(task);
+  let insertAt = siblings.findIndex(s=>taskDateSortKey(s) > key);
+  if(insertAt===-1) insertAt = siblings.length;
+  const ordered = siblings.slice();
+  ordered.splice(insertAt, 0, task);
+  const updates = [];
+  ordered.forEach((t,i)=>{ if(t.sort_order!==i) updates.push(sb.from('pt_tasks').update({sort_order:i}).eq('id',t.id)); });
+  if(updates.length) await Promise.all(updates);
+}
+// Sắp xếp lại TOÀN BỘ công việc trong dự án theo ngày bắt đầu (theo từng nhóm anh em), dùng để
+// dọn lại dữ liệu cũ đã bị xếp lộn xộn — chỉ Administrator / Quản trị dự án mới gọi được (xem canEditDates).
+async function resortProjectByDate(projectId){
+  const tasks = tasksOfProject(projectId);
+  const groups = {};
+  tasks.forEach(t=>{ const key = t.parent_task_id || '__top__'; (groups[key] = groups[key] || []).push(t); });
+  const updates = [];
+  Object.values(groups).forEach(group=>{
+    const sorted = group.slice().sort((a,b)=>{
+      const ka=taskDateSortKey(a), kb=taskDateSortKey(b);
+      if(ka!==kb) return ka<kb ? -1 : 1;
+      return a.sort_order - b.sort_order; // giữ ổn định khi trùng ngày
+    });
+    sorted.forEach((t,i)=>{ if(t.sort_order!==i) updates.push(sb.from('pt_tasks').update({sort_order:i}).eq('id',t.id)); });
+  });
+  if(!updates.length){ toast('Thứ tự hiện tại đã đúng theo ngày bắt đầu'); return; }
+  const results = await Promise.all(updates);
+  const err = results.find(r=>r && r.error);
+  if(err){ toast(err.error.message || 'Có lỗi xảy ra', true); return; }
+  await loadAll(); toast('Đã sắp xếp lại theo ngày bắt đầu'); render();
+}
+// Move up/down thủ công: chuẩn hoá sort_order của cả nhóm anh em theo thứ tự hiển thị hiện tại
+// (khắc phục luôn dữ liệu cũ có sort_order trùng nhau/đều bằng 0) rồi hoán đổi vị trí 2 công việc.
+async function moveTaskUpDown(taskId, direction){
+  const t = taskById(taskId);
+  if(!t) return;
+  const siblings = t.parent_task_id ? childTasks(t.parent_task_id) : topTasks(t.project_id);
+  const idx = siblings.findIndex(s=>s.id===taskId);
+  const swapIdx = direction==='up' ? idx-1 : idx+1;
+  if(idx<0 || swapIdx<0 || swapIdx>=siblings.length) return;
+  const ids = siblings.map(s=>s.id);
+  [ids[idx], ids[swapIdx]] = [ids[swapIdx], ids[idx]];
+  const updates = ids.map((id,i)=> sb.from('pt_tasks').update({sort_order:i}).eq('id',id));
+  const results = await Promise.all(updates);
+  const err = results.find(r=>r && r.error);
+  if(err){ toast(err.error.message || 'Có lỗi xảy ra', true); return; }
+  await loadAll(); render();
+}
+
+/* ---------------------- Đánh số thứ tự công việc (I, II.. / 1, 2../ a, b..) ---------------------- */
+function toRomanUpper(num){
+  const table = [[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
+  let n = num, out = '';
+  for(const [v,s] of table){ while(n>=v){ out+=s; n-=v; } }
+  return out || String(num);
+}
+function toLetterLower(num){
+  let n = num, out = '';
+  while(n>0){ const rem=(n-1)%26; out = String.fromCharCode(97+rem) + out; n = Math.floor((n-1)/26); }
+  return out || String(num);
+}
+// depth 0 -> I, II, III...   depth 1 -> 1, 2, 3...   depth 2 -> a, b, c...
+// depth 3+ lặp lại chu kỳ trên (I/1/a) để vẫn có nhãn hợp lý dù cây lồng sâu hơn dự kiến.
+function taskOrderLabel(depth, idx1){
+  const scheme = depth % 3;
+  if(scheme===0) return toRomanUpper(idx1) + '.';
+  if(scheme===1) return String(idx1) + '.';
+  return toLetterLower(idx1) + '.';
+}
+// Tính độ sâu (depth) và vị trí (idx1, 1-based) của một công việc trong nhóm anh em đã sắp xếp —
+// dùng để hiển thị nhãn số thứ tự (I./1./a.) ở những nơi ngoài renderTaskRow, như tiêu đề modal.
+function taskPositionInfo(t){
+  let depth = 0, cur = t;
+  while(cur && cur.parent_task_id){ depth++; cur = taskById(cur.parent_task_id); }
+  const siblings = t.parent_task_id ? childTasks(t.parent_task_id) : topTasks(t.project_id);
+  const idx1 = Math.max(1, siblings.findIndex(s=>s.id===t.id) + 1);
+  return { depth, idx1 };
+}
 async function addComment(taskId, content){
   if(!content.trim()) return false;
   return mutate(sb.from('pt_task_comments').insert({ task_id:taskId, author_id:State.profile.id, content:content.trim() }));
@@ -892,7 +1002,7 @@ function taskDueBadge(t){
   else if(isDueSoon(t)) style = 'background:#fab21922;color:var(--warning);font-weight:700;';
   return `<span class="task-due" style="${style}">${fmtDate(t.due_date)}</span>`;
 }
-function renderTaskRow(t, projectId, depth){
+function renderTaskRow(t, projectId, depth, idx1, siblingCount){
   const kids = childTasks(t.id);
   const hasKids = kids.length>0;
   const expanded = !!State.expanded[t.id];
@@ -903,11 +1013,17 @@ function renderTaskRow(t, projectId, depth){
   const editable = canEdit(projectId);
   const locked = t.approval_status==='approved';
   const canDelete = editable && (!locked || isGlobalAdmin());
+  const canReorder = canEditDates(projectId);
+  const label = taskOrderLabel(depth, idx1);
   return `
   <div class="task-row ${glow}" style="padding-left:${12+depth*22}px;">
     ${hasKids ? `<button class="expand-btn" data-expand="${t.id}">${expanded?'&#9660;':'&#9654;'}</button>` : `<span style="width:18px;display:inline-block;"></span>`}
+    ${canReorder ? `<div class="task-move-col">
+      <button class="icon-btn" data-move-up="${t.id}" title="Di chuyển lên" ${idx1<=1?'disabled':''}>&#9650;</button>
+      <button class="icon-btn" data-move-down="${t.id}" title="Di chuyển xuống" ${idx1>=siblingCount?'disabled':''}>&#9660;</button>
+    </div>` : ''}
     <div class="task-title-wrap" data-open-task="${t.id}">
-      <div class="task-title">${locked?'&#128274; ':''}${escapeHtml(t.title)}</div>
+      <div class="task-title">${locked?'&#128274; ':''}<span class="task-order-label">${label}</span>${escapeHtml(t.title)}</div>
       ${hasKids ? `<div class="task-sub-of">${kids.length} công việc con</div>` : ''}
     </div>
     <div class="task-side">
@@ -920,14 +1036,16 @@ function renderTaskRow(t, projectId, depth){
       ${canDelete ? `<button class="icon-btn" data-delete-task="${t.id}" title="Xoá">&#128465;</button>` : ''}
     </div>
   </div>
-  ${expanded ? kids.map(k=>renderTaskRow(k, projectId, depth+1)).join('') : ''}
+  ${expanded ? kids.map((k,i)=>renderTaskRow(k, projectId, depth+1, i+1, kids.length)).join('') : ''}
   `;
 }
 function viewTaskList(p){
   const top = topTasks(p.id);
   const editable = canEdit(p.id);
+  const canReorder = canEditDates(p.id);
   return `<div class="card">
-    ${top.length ? top.map(t=>renderTaskRow(t,p.id,0)).join('') : `<div class="empty-hint">Chưa có công việc nào trong dự án này.</div>`}
+    ${canReorder ? `<div class="list-toolbar"><button class="btn btn-sm" data-resort-date="${p.id}" title="Xếp lại toàn bộ công việc trong dự án theo ngày bắt đầu">&#8635; Sắp xếp lại theo ngày bắt đầu</button></div>` : ''}
+    ${top.length ? top.map((t,i)=>renderTaskRow(t,p.id,0,i+1,top.length)).join('') : `<div class="empty-hint">Chưa có công việc nào trong dự án này.</div>`}
     ${editable ? `<div class="add-subtask-row"><button class="btn btn-sm" data-add-top="${p.id}">+ Thêm công việc lớn</button></div>` : ''}
   </div>`;
 }
@@ -941,6 +1059,10 @@ function bindTaskList(p){
     const id=b.dataset.deleteTask; const t=taskById(id);
     askConfirm(`Xoá công việc "${t?t.title:''}"? Mọi công việc con và phản hồi liên quan cũng sẽ bị xoá.`, ()=>deleteTask(id));
   }));
+  document.querySelectorAll('[data-move-up]').forEach(b=>b.addEventListener('click',(e)=>{ e.stopPropagation(); moveTaskUpDown(b.dataset.moveUp, 'up'); }));
+  document.querySelectorAll('[data-move-down]').forEach(b=>b.addEventListener('click',(e)=>{ e.stopPropagation(); moveTaskUpDown(b.dataset.moveDown, 'down'); }));
+  const resortBtn = document.querySelector('[data-resort-date]');
+  if(resortBtn) resortBtn.addEventListener('click', ()=> resortProjectByDate(p.id));
 }
 function openTask(id){ State.openTaskId=id; renderModals(); }
 
@@ -1476,11 +1598,12 @@ function viewTaskModal(){
   const comments = commentsOfTask(t.id);
   const parent = t.parent_task_id ? taskById(t.parent_task_id) : null;
   const kids = childTasks(t.id);
+  const { depth: tDepth, idx1: tIdx1 } = taskPositionInfo(t);
   return `<div class="overlay" id="task-modal-overlay">
     <div class="card modal">
       <div class="modal-head">
         <div>
-          <h2>${locked?'&#128274; ':''}${parent ? `<span style="color:var(--muted);font-weight:500;">${escapeHtml(parent.title)} &rsaquo;</span> ` : ''}${escapeHtml(t.title)}</h2>
+          <h2>${locked?'&#128274; ':''}${parent ? `<span style="color:var(--muted);font-weight:500;">${escapeHtml(parent.title)} &rsaquo;</span> ` : ''}<span class="task-order-label">${taskOrderLabel(tDepth, tIdx1)}</span>${escapeHtml(t.title)}</h2>
           <div class="crumb" style="font-size:11.5px;color:var(--muted);">${escapeHtml(p.name)}</div>
         </div>
         <button class="modal-close" id="close-task-modal">&times;</button>
