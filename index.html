@@ -464,6 +464,11 @@ async function approveProjectAdmin(projectId, userId){ return mutate(sb.from('pt
 async function rejectProjectAdmin(projectId, userId){ return mutate(sb.from('pt_project_members').update({role:'editor'}).eq('project_id',projectId).eq('user_id',userId), 'Đã từ chối — hạ xuống Biên tập viên'); }
 async function toggleAdmin(profileId, val){ return mutate(sb.from('pt_profiles').update({is_admin:val}).eq('id',profileId), 'Đã cập nhật quyền quản trị'); }
 async function setUserDisabled(profileId, val){ return mutate(sb.from('pt_profiles').update({disabled:val}).eq('id',profileId), val?'Đã vô hiệu hoá tài khoản':'Đã kích hoạt lại tài khoản'); }
+// New-signup approval: pt_profiles.approved gates whether a self-registered account can
+// access any project data at all (see pt_project_role RLS). Duyệt = approve; Xoá = reject
+// (delete the pending profile row outright — they were never given project access yet).
+async function approveSignup(profileId){ return mutate(sb.from('pt_profiles').update({approved:true}).eq('id',profileId), 'Đã duyệt tài khoản'); }
+async function rejectSignup(profileId){ return mutate(sb.from('pt_profiles').delete().eq('id',profileId), 'Đã xoá tài khoản đăng ký'); }
 
 /* fix setApproval properly */
 async function setApprovalStatus(taskId, status){
@@ -487,6 +492,15 @@ async function afterLogin(){
     const { data } = await sb.from('pt_profiles').select('*').eq('id',uid).maybeSingle();
     if(data){ prof = data; break; }
     await new Promise(r=>setTimeout(r, 500));
+  }
+  if(!prof){
+    // No profile row (account was rejected/deleted by an Administrator, or never finished
+    // provisioning) — don't leave the user stuck on a blank/half-logged-in screen.
+    await sb.auth.signOut();
+    State.session = null; State.profile = null; State.view = 'login';
+    State.error = 'Tài khoản của bạn không còn tồn tại trong hệ thống (có thể đã bị từ chối hoặc xoá bởi Administrator). Vui lòng liên hệ Administrator hoặc đăng ký lại.';
+    render();
+    return;
   }
   State.profile = prof;
   await loadAll();
@@ -534,6 +548,12 @@ function render(){
   if(!State.session || !State.profile){
     app.innerHTML = viewLogin();
     bindLogin();
+    renderModals();
+    return;
+  }
+  if(!State.profile.is_admin && State.profile.approved===false){
+    app.innerHTML = viewPendingApproval();
+    bindPendingApproval();
     renderModals();
     return;
   }
@@ -599,6 +619,33 @@ function bindLogin(){
   if(lf) lf.addEventListener('submit', e=>{ e.preventDefault(); const f=new FormData(lf); handleLogin(f.get('email'), f.get('password')); });
   const sf = document.getElementById('signup-form');
   if(sf) sf.addEventListener('submit', e=>{ e.preventDefault(); const f=new FormData(sf); handleSignup(f.get('email'), f.get('password'), f.get('full_name')); });
+}
+
+/* ------------------------------- Pending approval view ---------------------- */
+function viewPendingApproval(){
+  return `
+  <div class="login-wrap">
+    <div class="card login-card" style="text-align:center;">
+      <div class="brand" style="padding:0;border:none;margin-bottom:16px;justify-content:center;">
+        <div class="brand-mark"></div>
+        <div style="text-align:left;">
+          <div class="brand-text">Project Tracker</div>
+          <div class="brand-sub">Dashboard theo dõi dự án doanh nghiệp</div>
+        </div>
+      </div>
+      <div style="font-size:34px;margin-bottom:10px;">&#9203;</div>
+      <div class="login-title" style="font-size:17px;">Tài khoản đang chờ phê duyệt</div>
+      <p style="color:var(--text-2);font-size:13.5px;line-height:1.7;margin:8px 0 4px;">
+        Xin chào ${escapeHtml(State.profile.full_name)}, tài khoản <b>${escapeHtml(State.profile.email)}</b> của bạn đã đăng ký thành công
+        nhưng đang chờ <b>Administrator</b> phê duyệt trước khi có thể sử dụng hệ thống. Vui lòng quay lại sau hoặc liên hệ quản trị viên.
+      </p>
+      <button class="btn" style="margin-top:14px;" id="pending-logout-btn">Đăng xuất</button>
+    </div>
+  </div>`;
+}
+function bindPendingApproval(){
+  const b = document.getElementById('pending-logout-btn');
+  if(b) b.addEventListener('click', handleLogout);
 }
 
 /* ------------------------------- App shell --------------------------------- */
@@ -1224,15 +1271,21 @@ function bindStats(){
 function pendingAdminGrants(){
   return State.allMembers.filter(m=>m.role==='admin' && !m.admin_approved && !m.removed_at);
 }
+// Newly self-registered accounts waiting on an Administrator to admit them into the system.
+function pendingSignups(){
+  return State.profiles.filter(pr=>!pr.is_admin && !pr.approved).sort((a,b)=> (a.created_at<b.created_at?-1:1));
+}
 function viewAdmin(){
   const pendingCount = pendingAdminGrants().length;
+  const signupCount = pendingSignups().length;
   return `
   <div class="tabbar">
     <button class="tabbtn ${State.adminTab==='users'?'active':''}" data-atab="users">Người dùng</button>
     <button class="tabbtn ${State.adminTab==='perms'?'active':''}" data-atab="perms">Dự án &amp; phân quyền</button>
     <button class="tabbtn ${State.adminTab==='approvals'?'active':''}" data-atab="approvals">Phê duyệt quản trị dự án${pendingCount?` (${pendingCount})`:''}</button>
+    <button class="tabbtn ${State.adminTab==='signups'?'active':''}" data-atab="signups">Tài khoản mới đăng ký${signupCount?` (${signupCount})`:''}</button>
   </div>
-  ${State.adminTab==='users' ? viewAdminUsers() : State.adminTab==='approvals' ? viewAdminApprovals() : viewAdminPerms()}
+  ${State.adminTab==='users' ? viewAdminUsers() : State.adminTab==='approvals' ? viewAdminApprovals() : State.adminTab==='signups' ? viewAdminSignups() : viewAdminPerms()}
   `;
 }
 function viewAdminUsers(){
@@ -1247,6 +1300,7 @@ function viewAdminUsers(){
           <div class="name" style="${pr.disabled?'color:var(--critical);text-decoration:line-through;':''}">${escapeHtml(pr.full_name)}</div>
           <div class="email">${escapeHtml(pr.email)}</div>
         </div>
+        ${!pr.approved ? `<span class="badge" style="font-size:10px;background:#fab21922;color:#8a6300;">Chờ duyệt</span>` : ''}
         ${pr.disabled ? `<span class="badge" style="font-size:10px;background:#d03b3b18;color:var(--critical);">Đã vô hiệu hoá</span>` : ''}
         <span style="font-size:11px;color:var(--muted);">Vô hiệu hoá</span>
         <button class="toggle ${pr.disabled?'on':''}" style="background:${pr.disabled?'var(--critical)':''}" data-toggle-disabled="${pr.id}"><span class="knob"></span></button>
@@ -1254,6 +1308,24 @@ function viewAdminUsers(){
         <button class="toggle ${pr.is_admin?'on':''}" data-toggle-admin="${pr.id}"><span class="knob"></span></button>
       </div>
     `).join('') || '<div class="empty-hint">Chưa có người dùng nào khác.</div>'}
+  </div>`;
+}
+function viewAdminSignups(){
+  const list = pendingSignups();
+  return `<div class="card pad">
+    <div class="section-title">Tài khoản mới đăng ký — chờ phê duyệt (${list.length})</div>
+    <p style="font-size:12.5px;color:var(--text-2);margin-top:-4px;">Người mới đăng ký chỉ thấy màn hình "chờ phê duyệt" và không truy cập được dự án nào cho tới khi bạn duyệt ở đây. Xoá sẽ từ chối và gỡ bỏ hoàn toàn yêu cầu đăng ký này (chưa có dữ liệu nào gắn với tài khoản này nên xoá an toàn).</p>
+    ${list.map(pr=>`
+      <div class="members-row">
+        <div class="avatar" style="width:28px;height:28px;font-size:11px;background:${avatarColor(pr.id)}">${initials(pr.full_name)}</div>
+        <div style="flex:1;min-width:0;">
+          <div class="name">${escapeHtml(pr.full_name)}</div>
+          <div class="email">${escapeHtml(pr.email)} &middot; Đăng ký: ${fmtDateTime(pr.created_at)}</div>
+        </div>
+        <button class="btn btn-sm" style="color:var(--good);border-color:var(--good);" data-signup-approve="${pr.id}">Duyệt</button>
+        <button class="btn btn-sm" style="color:var(--critical);border-color:var(--critical);" data-signup-reject="${pr.id}">Xoá</button>
+      </div>
+    `).join('') || '<div class="empty-hint">Không có tài khoản nào đang chờ duyệt.</div>'}
   </div>`;
 }
 function viewAdminApprovals(){
@@ -1341,6 +1413,13 @@ function bindAdmin(){
   if(State.adminTab==='approvals'){
     document.querySelectorAll('[data-appr-approve]').forEach(b=>b.addEventListener('click',()=>{ const [pid,uid]=b.dataset.apprApprove.split('|'); approveProjectAdmin(pid,uid); }));
     document.querySelectorAll('[data-appr-reject]').forEach(b=>b.addEventListener('click',()=>{ const [pid,uid]=b.dataset.apprReject.split('|'); askConfirm('Từ chối quyền Quản trị dự án? Người này sẽ được hạ xuống Biên tập viên.', ()=>rejectProjectAdmin(pid,uid)); }));
+  }
+  if(State.adminTab==='signups'){
+    document.querySelectorAll('[data-signup-approve]').forEach(b=>b.addEventListener('click',()=> approveSignup(b.dataset.signupApprove)));
+    document.querySelectorAll('[data-signup-reject]').forEach(b=>b.addEventListener('click',()=>{
+      const id=b.dataset.signupReject; const pr=profileById(id);
+      askConfirm(`Xoá yêu cầu đăng ký của "${pr?pr.full_name:''}" (${pr?pr.email:''})? Người này sẽ không đăng nhập được nữa.`, ()=>rejectSignup(id));
+    }));
   }
   if(State.adminTab==='perms'){
     const sel = document.getElementById('admin-project-select');
