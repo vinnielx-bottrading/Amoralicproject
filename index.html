@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Project Tracker — Dashboard theo dõi dự án</title>
+<title>Amoralic Project Tracker — Dashboard theo dõi dự án</title>
 <style>
   :root{
     color-scheme: light;
@@ -261,7 +261,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script>
 /* =========================================================================
-   PROJECT TRACKER DASHBOARD
+   AMORALIC PROJECT TRACKER DASHBOARD
    Single-file SPA backed by Supabase (Postgres + Auth + RLS).
    ========================================================================= */
 
@@ -507,7 +507,7 @@ function viewLogin(){
       <div class="brand" style="padding:0;border:none;margin-bottom:16px;">
         <div class="brand-mark"></div>
         <div>
-          <div class="brand-text">Project Tracker</div>
+          <div class="brand-text">Amoralic Project Tracker</div>
           <div class="brand-sub">Dashboard theo dõi dự án doanh nghiệp</div>
         </div>
       </div>
@@ -568,7 +568,7 @@ function viewShell(){
     <div class="sidebar">
       <div class="brand">
         <div class="brand-mark"></div>
-        <div><div class="brand-text">Project Tracker</div><div class="brand-sub">Dashboard dự án</div></div>
+        <div><div class="brand-text">KafkaX Tracker</div><div class="brand-sub">Dashboard dự án</div></div>
       </div>
       <div class="nav">
         ${navItems().map(it=>`<button class="nav-item ${State.view===it.key?'active':''}" data-nav="${it.key}"><span class="nav-icon">${it.icon}</span>${it.label}</button>`).join('')}
